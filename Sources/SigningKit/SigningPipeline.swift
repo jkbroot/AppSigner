@@ -7,12 +7,18 @@ public struct SigningRequest {
     public var edits: InfoPlistEdits
     public var dylibs: [URL]
     public var iconImage: URL?
+    /// Removals / weak-flag changes applied to the unpacked bundle before signing.
+    public var bundleEdits: BundleEdits
+    /// Inject new dylibs as weak references so a missing file cannot crash the app.
+    public var injectWeak: Bool
     public var outputURL: URL?
     public init(ipa: URL, profileURL: URL, identitySHA1: String,
                 edits: InfoPlistEdits = .init(), dylibs: [URL] = [],
-                iconImage: URL? = nil, outputURL: URL? = nil) {
+                iconImage: URL? = nil, bundleEdits: BundleEdits = .init(),
+                injectWeak: Bool = true, outputURL: URL? = nil) {
         self.ipa = ipa; self.profileURL = profileURL; self.identitySHA1 = identitySHA1
-        self.edits = edits; self.dylibs = dylibs; self.iconImage = iconImage; self.outputURL = outputURL
+        self.edits = edits; self.dylibs = dylibs; self.iconImage = iconImage
+        self.bundleEdits = bundleEdits; self.injectWeak = injectWeak; self.outputURL = outputURL
     }
 }
 
@@ -25,13 +31,15 @@ public struct SigningResult {
 
 public enum PipelineEvent: CustomStringConvertible {
     case unpacking, editingMetadata, embeddingProfile, extractingEntitlements
-    case replacingIcon, injecting(String), signing(String), repacking, verifying, done(URL)
+    case editingBundle(String), replacingIcon, injecting(String), signing(String)
+    case repacking, verifying, done(URL)
     public var description: String {
         switch self {
         case .unpacking: return "Unpacking IPA"
         case .editingMetadata: return "Editing Info.plist"
         case .embeddingProfile: return "Embedding provisioning profile"
         case .extractingEntitlements: return "Extracting entitlements"
+        case .editingBundle(let d): return d
         case .replacingIcon: return "Replacing icon"
         case .injecting(let c): return "Injecting \(c)"
         case .signing(let c): return "Signing \(c)"
@@ -108,6 +116,12 @@ public struct SigningPipeline {
         try? fm.removeItem(at: embedded)
         try fm.copyItem(at: request.profileURL, to: embedded)
 
+        if !request.bundleEdits.isEmpty {
+            try BundleEditor().apply(request.bundleEdits, to: app) { line in
+                progress?(.editingBundle(line))
+            }
+        }
+
         if !request.dylibs.isEmpty {
             let frameworks = app.appendingPathComponent("Frameworks")
             try? fm.createDirectory(at: frameworks, withIntermediateDirectories: true)
@@ -120,7 +134,8 @@ public struct SigningPipeline {
                 let dest = frameworks.appendingPathComponent(name)
                 try? fm.removeItem(at: dest)
                 try fm.copyItem(at: dylib, to: dest)
-                try MachOInjector.inject(dylibPath: "@executable_path/Frameworks/\(name)", into: mainBinary)
+                try MachOInjector.inject(dylibPath: "@executable_path/Frameworks/\(name)",
+                                         into: mainBinary, weak: request.injectWeak)
             }
         }
 

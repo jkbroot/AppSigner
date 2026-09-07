@@ -17,6 +17,7 @@ struct ContentView: View {
             identityRow
             if model.ipaURL != nil { metadataRows }
             deviceRow
+            if model.canRunPreflight { preflightRow }
             signBar
         }
         .padding(16)
@@ -25,6 +26,8 @@ struct ContentView: View {
         .background(WindowConfigurator(size: NSSize(width: 560, height: 600)))
         .sheet(isPresented: $model.showProcess) { ProcessView() }
         .sheet(isPresented: $model.showTools) { ToolsView() }
+        .sheet(isPresented: $model.showContents) { ContentsView() }
+        .sheet(isPresented: $model.showPreflight) { PreflightView() }
     }
 
     // MARK: Header
@@ -52,7 +55,10 @@ struct ContentView: View {
         VStack(spacing: 6) {
             StatusRow(systemImage: "app.dashed", label: "App",
                       filename: model.ipaURL?.lastPathComponent,
-                      detail: model.ipaURL != nil ? model.appBundleName : nil,
+                      detail: model.ipaURL != nil ? (model.removalSummary ?? model.appBundleName) : nil,
+                      accessory: model.ipaURL == nil ? nil : AnyView(
+                        Button("Contents") { model.showContents = true }
+                            .controlSize(.small)),
                       onClear: { model.clearIPA() })
             StatusRow(systemImage: "doc.badge.gearshape", label: "Profile",
                       filename: model.profileURL?.lastPathComponent,
@@ -221,6 +227,33 @@ struct ContentView: View {
         }
     }
 
+    // MARK: Pre-flight
+
+    private var preflightRow: some View {
+        HStack(spacing: 10) {
+            Image(systemName: model.errorCount > 0 ? "xmark.octagon.fill"
+                  : (model.warningCount > 0 ? "exclamationmark.triangle.fill" : "checkmark.seal.fill"))
+                .foregroundStyle(model.errorCount > 0 ? .red
+                                 : (model.warningCount > 0 ? .orange : .green))
+                .frame(width: 20)
+            Text(preflightSummary).font(.subheadline)
+            Spacer()
+            Button("Review") { model.showPreflight = true }.controlSize(.small)
+        }
+        .padding(.vertical, 7).padding(.horizontal, 10)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Color(nsColor: .controlBackgroundColor)))
+    }
+
+    private var preflightSummary: String {
+        if model.errorCount > 0 || model.warningCount > 0 {
+            var parts: [String] = []
+            if model.errorCount > 0 { parts.append("\(model.errorCount) error\(model.errorCount == 1 ? "" : "s")") }
+            if model.warningCount > 0 { parts.append("\(model.warningCount) warning\(model.warningCount == 1 ? "" : "s")") }
+            return parts.joined(separator: " · ")
+        }
+        return model.report == nil ? "Basic checks passed — scan for a full check" : "No issues found"
+    }
+
     // MARK: Sign bar
 
     private var signBar: some View {
@@ -310,6 +343,7 @@ private struct StatusRow: View {
     let label: String
     let filename: String?
     let detail: String?
+    var accessory: AnyView? = nil
     let onClear: () -> Void
 
     var body: some View {
@@ -327,6 +361,7 @@ private struct StatusRow: View {
                 }
             }
             Spacer()
+            if let accessory { accessory }
             if filename != nil {
                 Button { onClear() } label: { Image(systemName: "xmark.circle.fill") }
                     .buttonStyle(.borderless).foregroundStyle(.secondary)

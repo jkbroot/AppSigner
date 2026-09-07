@@ -36,7 +36,18 @@ install — the standard [libimobiledevice](https://libimobiledevice.org) suite.
 - **Native provisioning-profile parsing** — team, expiry, type (Development / Ad Hoc /
   App Store / Enterprise), app-id and entitlements, parsed in pure Swift.
 - **Native dylib injection** — adds an `LC_LOAD_DYLIB` command straight into the Mach-O
-  header (thin **and** fat binaries). No `optool` or external injector.
+  header (thin **and** fat binaries), weak-linked by default so a missing library can
+  never crash the app. No `optool` or external injector.
+- **IPA explorer & dylib manager** — scans every Mach-O in the bundle (main app, app
+  extensions, frameworks, dylibs, watch app), lists each library reference with its
+  state (weak/strong, bundled/missing/jailbreak) and who else uses it, and lets you
+  **remove references, make them weak, or delete whole bundle entries** — app
+  extensions, watch apps, frameworks, resource bundles, localizations — during signing.
+- **Pre-flight checks** — before you sign, it flags FairPlay-encrypted binaries, expired
+  or soon-to-expire profiles, an identity the profile does not authorize, a bundle id
+  that a non-wildcard profile will not cover, extensions that need their own profiles,
+  a connected device that is not provisioned, missing libraries, jailbreak-only paths,
+  a missing arm64 slice, and entitlements your profile will drop.
 - **Icon replacement** — generates the standard iOS icon sizes and overrides the app
   icon, including icons compiled into `Assets.car` (see [notes](#notes--limitations)).
 - **Metadata editing** — change the Bundle ID, display name, version and build number.
@@ -78,10 +89,13 @@ You can also open `Package.swift` in Xcode and run the `AppSigner` target.
    - an image (`.png`/`.jpg`/…) → the replacement icon
 2. AppSigner reads your Keychain and selects the identity that matches the profile.
 3. Optionally edit the **Bundle ID / name / version / build**.
-4. *(Optional)* enable **Install on device after signing** and pick a connected device.
-5. Press **Sign**. A live process screen shows each step: unpack → edit → embed profile →
+4. *(Optional)* open **Contents** to inspect the bundle and tick anything to strip out —
+   tweak libraries, app extensions, a watch app, large resources — and review the
+   **pre-flight** findings above the Sign button.
+5. *(Optional)* enable **Install on device after signing** and pick a connected device.
+6. Press **Sign**. A live process screen shows each step: unpack → edit → embed profile →
    inject → replace icon → sign (inner → outer) → verify → repack.
-6. The signed `<name>_Signed.ipa` is written next to the input, ready to install.
+7. The signed `<name>_Signed.ipa` is written next to the input, ready to install.
 
 ## How it works
 
@@ -89,11 +103,16 @@ The signing pipeline runs entirely against absolute paths in a temporary working
 directory that is always cleaned up:
 
 ```
-unpack IPA  ->  edit Info.plist  ->  embed provisioning profile  ->  extract entitlements
-            ->  inject dylibs     ->  replace icon                ->  codesign each component
+unpack IPA  ->  edit Info.plist        ->  embed provisioning profile
+            ->  apply bundle edits      (strip dylib references / delete entries)
+            ->  inject dylibs (weak)    ->  replace icon
+            ->  extract entitlements    ->  codesign each component
                 (inner → outer: frameworks, dylibs, app extensions, then the .app)
-            ->  verify (codesign --verify --deep --strict)        ->  repack the IPA
+            ->  verify (codesign --verify --deep --strict)  ->  repack the IPA
 ```
+
+Nothing touches your original `.ipa`: every run works on a fresh temporary copy that is
+always cleaned up.
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the module breakdown.
 

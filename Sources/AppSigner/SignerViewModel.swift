@@ -30,6 +30,103 @@ final class SignerViewModel: ObservableObject {
     // Replacement icon
     @Published var iconURL: URL?
 
+    // Pre-flight
+    @Published var showPreflight = false
+    @Published private(set) var originalEntitlements: [String: Any]?
+
+    /// Recomputed on every state change — validation is pure and cheap.
+    var findings: [PreflightFinding] {
+        PreflightValidator().validate(PreflightInput(
+            report: report,
+            profile: profile,
+            identitySHA1: selectedIdentitySHA1,
+            bundleID: bundleID.isEmpty ? nil : bundleID,
+            deviceUDID: installAfterSign ? selectedDeviceUDID : nil,
+            originalEntitlements: originalEntitlements))
+    }
+    var errorCount: Int { findings.filter { $0.severity == .error }.count }
+    var warningCount: Int { findings.filter { $0.severity == .warning }.count }
+    var canRunPreflight: Bool { ipaURL != nil && profileURL != nil }
+
+    // Contents explorer (inspect + removals)
+    @Published var showContents = false
+    @Published var inspecting = false
+    @Published var report: BundleReport?
+    @Published var removedItems: Set<String> = []        // BundleItem.id
+    @Published var removedDylibKeys: Set<String> = []    // "binary|dylib"
+    @Published var weakenedDylibKeys: Set<String> = []
+    @Published var injectWeak = true
+
+    static func dylibKey(_ binary: String, _ dylib: String) -> String { "\(binary)|\(dylib)" }
+    private static func splitKey(_ key: String) -> DylibEdit? {
+        let parts = key.split(separator: "|", maxSplits: 1).map(String.init)
+        guard parts.count == 2 else { return nil }
+        return DylibEdit(binaryPath: parts[0], dylibPath: parts[1])
+    }
+
+    /// Unpacks the selected IPA into a temporary copy and inspects it (read-only).
+    func inspectIPA() {
+        guard let ipaURL, !inspecting else { return }
+        inspecting = true
+        DispatchQueue.global(qos: .userInitiated).async {
+            var scanned: BundleReport?
+            var entitlements: [String: Any]?
+            if let pkg = try? IPAPackage.unpack(ipa: ipaURL) {
+                scanned = try? BundleInspector().inspect(appURL: pkg.appURL)
+                entitlements = Codesigner().entitlements(of: pkg.appURL)
+                pkg.cleanup()
+            }
+            DispatchQueue.main.async {
+                self.originalEntitlements = entitlements
+                self.report = scanned
+                self.inspecting = false
+                if scanned == nil { self.errorMessage = "Could not read the app bundle." }
+            }
+        }
+    }
+
+    /// Edits derived from the current selection. Removing a dylib reference also drops the
+    /// library file when nothing else in the bundle still references it.
+    var bundleEdits: BundleEdits {
+        var edits = BundleEdits()
+        edits.removedDylibs = removedDylibKeys.compactMap(Self.splitKey)
+        edits.weakenedDylibs = weakenedDylibKeys.compactMap(Self.splitKey)
+
+        var paths = removedItems
+        if let report {
+            for edit in edits.removedDylibs {
+                guard let resolved = report.binaries.first(where: { $0.id == edit.binaryPath })?
+                    .dylibs.first(where: { $0.path == edit.dylibPath })?.resolvedRelativePath else { continue }
+                let others = (report.referrers[resolved] ?? []).filter { $0 != edit.binaryPath }
+                if others.isEmpty { paths.insert(resolved) }
+            }
+        }
+        edits.removedPaths = Array(paths)
+        return edits
+    }
+
+    var removalSummary: String? {
+        let edits = bundleEdits
+        guard !edits.isEmpty else { return nil }
+        var parts: [String] = []
+        if !edits.removedDylibs.isEmpty { parts.append("\(edits.removedDylibs.count) dylib refs") }
+        if !edits.removedPaths.isEmpty { parts.append("\(edits.removedPaths.count) files") }
+        if !edits.weakenedDylibs.isEmpty { parts.append("\(edits.weakenedDylibs.count) weakened") }
+        let freed = estimatedFreedBytes
+        let size = freed > 0 ? " · frees ~\(ByteCountFormatter.string(fromByteCount: freed, countStyle: .file))" : ""
+        return "Will remove: " + parts.joined(separator: ", ") + size
+    }
+
+    var estimatedFreedBytes: Int64 {
+        guard let report else { return 0 }
+        let paths = Set(bundleEdits.removedPaths)
+        return report.items.filter { paths.contains($0.id) }.reduce(0) { $0 + $1.sizeBytes }
+    }
+
+    func clearContentsSelection() {
+        removedItems.removeAll(); removedDylibKeys.removeAll(); weakenedDylibKeys.removeAll()
+    }
+
     // Identity / profile
     @Published var identities: [SigningIdentity] = []
     @Published var matchedIdentities: [SigningIdentity] = []
@@ -314,11 +411,18 @@ final class SignerViewModel: ObservableObject {
     func removeDylib(_ url: URL) { dylibs.removeAll { $0 == url } }
     func clearIcon() { iconURL = nil }
 
-    func clearIPA() { ipaURL = nil; originalInfo = nil; bundleID = ""; displayName = ""; shortVersion = ""; bundleVersion = "" }
+    func clearIPA() {
+        ipaURL = nil; originalInfo = nil; report = nil; originalEntitlements = nil
+        bundleID = ""; displayName = ""; shortVersion = ""; bundleVersion = ""
+        clearContentsSelection()
+    }
     func clearProfile() { profileURL = nil; profile = nil; matchedIdentities = []; selectedIdentitySHA1 = nil }
 
     func setIPA(_ url: URL) {
         ipaURL = url; resultURL = nil; errorMessage = nil
+        report = nil
+        originalEntitlements = nil
+        clearContentsSelection()
         DispatchQueue.global(qos: .userInitiated).async {
             do {
                 let info = try IPAPackage.readAppInfo(ipa: url)
@@ -374,7 +478,9 @@ final class SignerViewModel: ObservableObject {
 
         let request = SigningRequest(ipa: ipaURL, profileURL: profileURL,
                                      identitySHA1: sha1, edits: currentEdits(),
-                                     dylibs: dylibs, iconImage: iconURL, outputURL: nil)
+                                     dylibs: dylibs, iconImage: iconURL,
+                                     bundleEdits: bundleEdits, injectWeak: injectWeak,
+                                     outputURL: nil)
         let shouldInstall = installAfterSign && deviceToolsAvailable
         let udid = selectedDeviceUDID
         let deviceName = devices.first { $0.udid == udid }?.name ?? "connected device"

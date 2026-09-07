@@ -18,6 +18,8 @@ public struct ProvisioningProfile {
     public var type: ProfileType
     public var expirationDate: Date?
     public var provisionedDeviceCount: Int
+    /// UDIDs the profile is provisioned for (empty for App Store / enterprise profiles).
+    public var provisionedDevices: [String]
     /// The profile's `Entitlements` dictionary (used to build the codesign entitlements file).
     public var entitlements: [String: Any]
 
@@ -76,6 +78,7 @@ public struct ProvisioningProfile {
             type: type,
             expirationDate: expiration,
             provisionedDeviceCount: devices.count,
+            provisionedDevices: devices,
             entitlements: entitlements
         )
     }

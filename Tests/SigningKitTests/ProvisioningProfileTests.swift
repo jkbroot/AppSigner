@@ -31,3 +31,12 @@ final class ProvisioningProfileTests: XCTestCase {
         XCTAssertThrowsError(try ProvisioningProfile.parse(data: Data("not a profile".utf8)))
     }
 }
+
+extension ProvisioningProfileTests {
+    func testExposesProvisionedDeviceUDIDs() throws {
+        let profile = try ProvisioningProfile.parse(data: Data(contentsOf: Fixtures.sampleProfileURL))
+        XCTAssertEqual(profile.provisionedDevices,
+                       ["00000000-0000000000000001", "00000000-0000000000000002"])
+        XCTAssertEqual(profile.provisionedDeviceCount, profile.provisionedDevices.count)
+    }
+}

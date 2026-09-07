@@ -1,147 +1,163 @@
 import Foundation
 
-/// Injects an `LC_LOAD_DYLIB` load command into a Mach-O binary natively (no optool).
-/// Writes the command into the existing header padding and bumps `ncmds`/`sizeofcmds`,
-/// so the file size and all section offsets stay unchanged. Handles thin 64-bit
-/// (little-endian) and fat binaries. The stale code signature (if any) is left for the
-/// caller to re-sign afterwards.
+/// Adds, removes and re-flags `LC_LOAD_DYLIB` / `LC_LOAD_WEAK_DYLIB` load commands in a
+/// Mach-O binary — natively, without `optool` or `install_name_tool`.
+///
+/// All edits stay inside the Mach-O header region: injection writes into the existing
+/// header padding and removal compacts the load commands and re-zeroes the freed tail.
+/// File size and every section offset therefore stay unchanged, so the binary remains
+/// valid; the (now stale) signature is replaced by the caller's re-sign step.
+///
+/// Thin and fat files are both supported. 64-bit slices are edited; 32-bit slices can be
+/// removed from / re-flagged too, but cannot be injected into (their segment layout is
+/// not handled) and are skipped rather than failing the whole file.
 public enum MachOInjector {
     public enum InjectError: Error, LocalizedError, Equatable {
-        case notMachO, unsupportedArch, noHeaderSpace
+        case notMachO, unsupportedArch, noHeaderSpace, dylibNotFound
         public var errorDescription: String? {
             switch self {
             case .notMachO: return "Not a Mach-O file."
-            case .unsupportedArch: return "Unsupported Mach-O architecture (need 64-bit)."
+            case .unsupportedArch: return "No 64-bit Mach-O slice to modify."
             case .noHeaderSpace: return "Not enough header padding to inject the dylib load command."
+            case .dylibNotFound: return "That dylib reference was not found in the binary."
             }
         }
     }
 
-    private static let FAT_MAGIC: UInt32 = 0xCAFEBABE
-    private static let FAT_MAGIC_64: UInt32 = 0xCAFEBABF
-    private static let MH_MAGIC_64: UInt32 = 0xFEEDFACF
-    private static let LC_LOAD_DYLIB: UInt32 = 0x0C
-    private static let LC_SEGMENT_64: UInt32 = 0x19
+    // MARK: Inject
 
-    public static func inject(dylibPath: String, into url: URL) throws {
+    /// Adds a load command for `dylibPath`. `weak` uses `LC_LOAD_WEAK_DYLIB`, so the app
+    /// still launches when the library is missing — the safer default for tweaks.
+    public static func inject(dylibPath: String, into url: URL, weak: Bool = false) throws {
         var data = try Data(contentsOf: url)
-        guard data.count >= 8 else { throw InjectError.notMachO }
+        let slices = try MachO.slices(in: data)
+        guard !slices.isEmpty else { throw InjectError.notMachO }
 
-        let magicBE = try readU32(data, 0, bigEndian: true)
-        if magicBE == FAT_MAGIC || magicBE == FAT_MAGIC_64 {
-            try injectFat(&data, is64: magicBE == FAT_MAGIC_64, dylibPath: dylibPath)
-        } else if try readU32(data, 0, bigEndian: false) == MH_MAGIC_64 {
-            try injectThin(&data, base: 0, dylibPath: dylibPath)
-        } else {
-            throw InjectError.notMachO
+        var injected = false
+        for slice in slices where slice.is64 {
+            try injectIntoSlice(&data, slice: slice, dylibPath: dylibPath, weak: weak)
+            injected = true
         }
+        guard injected else { throw InjectError.unsupportedArch }
         try data.write(to: url)
     }
 
-    // MARK: Fat
+    private static func injectIntoSlice(_ data: inout Data, slice: MachO.Slice,
+                                        dylibPath: String, weak: Bool) throws {
+        let sizeofcmds = try MachO.u32(data, slice.offset + 20)
+        let ncmds = try MachO.u32(data, slice.offset + 16)
+        let loadEnd = slice.offset + slice.headerSize + Int(sizeofcmds)
 
-    private static func injectFat(_ data: inout Data, is64: Bool, dylibPath: String) throws {
-        let nfat = try readU32(data, 4, bigEndian: true)
-        var archOff = 8
-        for _ in 0..<nfat {
-            let sliceOffset: Int
-            if is64 {
-                sliceOffset = Int(try readU64(data, archOff + 8, bigEndian: true))
-                archOff += 32
-            } else {
-                sliceOffset = Int(try readU32(data, archOff + 8, bigEndian: true))
-                archOff += 20
-            }
-            try injectThin(&data, base: sliceOffset, dylibPath: dylibPath)
-        }
-    }
-
-    // MARK: Thin (64-bit little-endian)
-
-    private static func injectThin(_ data: inout Data, base: Int, dylibPath: String) throws {
-        guard try readU32(data, base, bigEndian: false) == MH_MAGIC_64 else {
-            throw InjectError.unsupportedArch
-        }
-        let headerSize = 32
-        let ncmds = try readU32(data, base + 16, bigEndian: false)
-        let sizeofcmds = try readU32(data, base + 20, bigEndian: false)
-        let loadStart = base + headerSize
-        let loadEnd = loadStart + Int(sizeofcmds)
-
-        // Smallest section file offset marks where the header padding ends.
+        // Header padding runs until the first section's file offset.
         var minSectionOffset = Int.max
-        var p = loadStart
-        for _ in 0..<ncmds {
-            let cmd = try readU32(data, p, bigEndian: false)
-            let cmdsize = Int(try readU32(data, p + 4, bigEndian: false))
-            guard cmdsize > 0, p + cmdsize <= data.count else { throw InjectError.notMachO }
-            if cmd == LC_SEGMENT_64 {
-                let nsects = Int(try readU32(data, p + 64, bigEndian: false))
-                var sp = p + 72
-                for _ in 0..<nsects {
-                    let off = Int(try readU32(data, sp + 48, bigEndian: false))
-                    if off > 0 { minSectionOffset = min(minSectionOffset, off) }
-                    sp += 80
-                }
+        try MachO.forEachCommand(data, slice: slice) { cmd, _, at in
+            guard cmd == 0x19 else { return }                    // LC_SEGMENT_64
+            let nsects = Int(try MachO.u32(data, at + 64))
+            var sp = at + 72
+            for _ in 0..<nsects {
+                let off = Int(try MachO.u32(data, sp + 48))
+                if off > 0 { minSectionOffset = min(minSectionOffset, off) }
+                sp += 80
             }
-            p += cmdsize
         }
-
-        let firstContent = (minSectionOffset == Int.max) ? loadEnd - base : minSectionOffset
-        let slack = firstContent - (headerSize + Int(sizeofcmds))
+        let firstContent = (minSectionOffset == Int.max) ? Int(sizeofcmds) + slice.headerSize : minSectionOffset
+        let slack = firstContent - (slice.headerSize + Int(sizeofcmds))
 
         let pathBytes = Array(dylibPath.utf8)
-        let cmdSize = ((24 + pathBytes.count + 1) + 7) & ~7   // align to 8
+        let cmdSize = ((24 + pathBytes.count + 1) + 7) & ~7
         guard cmdSize <= slack else { throw InjectError.noHeaderSpace }
 
-        var cmd = Data()
-        appendU32(&cmd, LC_LOAD_DYLIB)      // cmd
-        appendU32(&cmd, UInt32(cmdSize))    // cmdsize
-        appendU32(&cmd, 24)                 // dylib.name.offset
-        appendU32(&cmd, 2)                  // timestamp
-        appendU32(&cmd, 0)                  // current_version
-        appendU32(&cmd, 0)                  // compatibility_version
-        cmd.append(contentsOf: pathBytes)
-        cmd.append(0)
-        while cmd.count < cmdSize { cmd.append(0) }
+        var command = Data()
+        append(&command, weak ? MachO.LC_LOAD_WEAK_DYLIB : MachO.LC_LOAD_DYLIB)
+        append(&command, UInt32(cmdSize))
+        append(&command, 24)   // dylib.name offset
+        append(&command, 2)    // timestamp
+        append(&command, 0)    // current_version
+        append(&command, 0)    // compatibility_version
+        command.append(contentsOf: pathBytes)
+        command.append(0)
+        while command.count < cmdSize { command.append(0) }
 
-        // Overwrite the header padding with the new command (no length change).
-        let writeAt = loadEnd
-        let start = data.startIndex + writeAt
-        data.replaceSubrange(start..<(start + cmdSize), with: cmd)
-
-        try writeU32(&data, base + 16, ncmds + 1, bigEndian: false)
-        try writeU32(&data, base + 20, sizeofcmds + UInt32(cmdSize), bigEndian: false)
+        let start = data.startIndex + loadEnd
+        data.replaceSubrange(start..<(start + cmdSize), with: command)
+        try MachO.writeU32(&data, slice.offset + 16, ncmds + 1)
+        try MachO.writeU32(&data, slice.offset + 20, sizeofcmds + UInt32(cmdSize))
     }
 
-    // MARK: Byte helpers (offsets are relative to data.startIndex)
+    // MARK: Remove
 
-    private static func readU32(_ d: Data, _ off: Int, bigEndian: Bool) throws -> UInt32 {
-        let s = d.startIndex + off
-        guard off >= 0, s + 4 <= d.endIndex else { throw InjectError.notMachO }
-        let b = [UInt8](d[s..<s+4])
-        let v = UInt32(b[0]) | UInt32(b[1]) << 8 | UInt32(b[2]) << 16 | UInt32(b[3]) << 24
-        return bigEndian ? v.byteSwapped : v
+    /// Removes every load command referencing `path`, in every slice that has one.
+    public static func removeDylib(path: String, from url: URL) throws {
+        var data = try Data(contentsOf: url)
+        let slices = try MachO.slices(in: data)
+        guard !slices.isEmpty else { throw InjectError.notMachO }
+
+        var removed = false
+        // Slices are edited in place and keep their offsets (no length change).
+        for slice in slices {
+            while let found = try findCommand(data, slice: slice, path: path) {
+                try removeCommand(&data, slice: slice, at: found.offset, size: found.size)
+                removed = true
+            }
+        }
+        guard removed else { throw InjectError.dylibNotFound }
+        try data.write(to: url)
     }
 
-    private static func readU64(_ d: Data, _ off: Int, bigEndian: Bool) throws -> UInt64 {
-        let s = d.startIndex + off
-        guard off >= 0, s + 8 <= d.endIndex else { throw InjectError.notMachO }
-        let b = [UInt8](d[s..<s+8])
-        var v: UInt64 = 0
-        for i in 0..<8 { v |= UInt64(b[i]) << (8 * i) }
-        return bigEndian ? v.byteSwapped : v
+    private static func removeCommand(_ data: inout Data, slice: MachO.Slice,
+                                      at cmdOffset: Int, size: Int) throws {
+        let ncmds = try MachO.u32(data, slice.offset + 16)
+        let sizeofcmds = try MachO.u32(data, slice.offset + 20)
+        let loadEnd = slice.offset + slice.headerSize + Int(sizeofcmds)
+
+        // Shift the following commands up over the removed one, then zero the freed tail.
+        let tailStart = cmdOffset + size
+        if tailStart < loadEnd {
+            let tail = data.subdata(in: (data.startIndex + tailStart)..<(data.startIndex + loadEnd))
+            data.replaceSubrange((data.startIndex + cmdOffset)..<(data.startIndex + cmdOffset + tail.count),
+                                 with: tail)
+        }
+        let zeroStart = data.startIndex + loadEnd - size
+        data.replaceSubrange(zeroStart..<(data.startIndex + loadEnd), with: Data(repeating: 0, count: size))
+
+        try MachO.writeU32(&data, slice.offset + 16, ncmds - 1)
+        try MachO.writeU32(&data, slice.offset + 20, sizeofcmds - UInt32(size))
     }
 
-    private static func writeU32(_ d: inout Data, _ off: Int, _ value: UInt32, bigEndian: Bool) throws {
-        let s = d.startIndex + off
-        guard off >= 0, s + 4 <= d.endIndex else { throw InjectError.notMachO }
-        let v = bigEndian ? value.byteSwapped : value
-        let bytes: [UInt8] = [UInt8(v & 0xff), UInt8((v >> 8) & 0xff), UInt8((v >> 16) & 0xff), UInt8((v >> 24) & 0xff)]
-        d.replaceSubrange(s..<s+4, with: bytes)
+    // MARK: Weak flag
+
+    /// Switches a reference between `LC_LOAD_DYLIB` and `LC_LOAD_WEAK_DYLIB`.
+    public static func setWeak(_ weak: Bool, forDylib path: String, in url: URL) throws {
+        var data = try Data(contentsOf: url)
+        var changed = false
+        for slice in try MachO.slices(in: data) {
+            if let found = try findCommand(data, slice: slice, path: path) {
+                try MachO.writeU32(&data, found.offset,
+                                   weak ? MachO.LC_LOAD_WEAK_DYLIB : MachO.LC_LOAD_DYLIB)
+                changed = true
+            }
+        }
+        guard changed else { throw InjectError.dylibNotFound }
+        try data.write(to: url)
     }
 
-    private static func appendU32(_ d: inout Data, _ value: UInt32) {
+    // MARK: Helpers
+
+    private static func findCommand(_ data: Data, slice: MachO.Slice,
+                                    path: String) throws -> (offset: Int, size: Int)? {
+        var match: (Int, Int)?
+        try MachO.forEachCommand(data, slice: slice) { cmd, size, at in
+            guard match == nil, MachO.dylibCommands.contains(cmd) else { return }
+            let nameOffset = Int(try MachO.u32(data, at + 8))
+            guard nameOffset < size else { return }
+            if MachO.cString(data, at: at + nameOffset, limit: size - nameOffset) == path {
+                match = (at, size)
+            }
+        }
+        return match
+    }
+
+    private static func append(_ d: inout Data, _ value: UInt32) {
         d.append(UInt8(value & 0xff))
         d.append(UInt8((value >> 8) & 0xff))
         d.append(UInt8((value >> 16) & 0xff))

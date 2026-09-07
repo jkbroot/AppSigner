@@ -152,3 +152,49 @@ extension SigningPipelineTests {
         try Codesigner().verify(pkg.appURL)
     }
 }
+
+extension SigningPipelineTests {
+    /// End-to-end: strip an app extension and a dylib reference, then sign.
+    /// Gated by APPSIGNER_INTEGRATION=1.
+    func testSignsWithBundleRemovalsEndToEnd() throws {
+        guard ProcessInfo.processInfo.environment["APPSIGNER_INTEGRATION"] == "1" else {
+            throw XCTSkip("set APPSIGNER_INTEGRATION=1 to run the removal end-to-end test")
+        }
+        let profileURL = Fixtures.profileURL
+        let ipa = try XCTUnwrap(Fixtures.sourceIPAs().first)
+        let profile = try ProvisioningProfile.parse(data: Data(contentsOf: profileURL))
+        let match = try XCTUnwrap(KeychainService.identities(
+            try KeychainService().listCodeSigningIdentities(),
+            matchingCertificateSHA1s: profile.developerCertificateSHA1s).first)
+
+        // Inspect first to choose real targets generically.
+        let source = try IPAPackage.unpack(ipa: ipa)
+        let report = try BundleInspector().inspect(appURL: source.appURL)
+        let main = try XCTUnwrap(report.binaries.first { $0.role == .mainExecutable })
+        let appex = try XCTUnwrap(report.items.first { $0.kind == .appExtension && !$0.isProtected })
+        let bundledDylib = main.dylibs.first { $0.kind == .bundled && $0.path.hasSuffix(".dylib") }
+        source.cleanup()
+
+        var edits = BundleEdits()
+        edits.removedPaths = [appex.id]
+        if let d = bundledDylib { edits.removedDylibs = [DylibEdit(binaryPath: main.id, dylibPath: d.path)] }
+
+        let out = Fixtures.workspaceRoot.appendingPathComponent("RemovalTest_Signed.ipa")
+        try? FileManager.default.removeItem(at: out)
+        let result = try SigningPipeline().sign(
+            SigningRequest(ipa: ipa, profileURL: profileURL, identitySHA1: match.sha1,
+                           bundleEdits: edits, outputURL: out),
+            progress: { print("• \($0)") })
+
+        let pkg = try IPAPackage.unpack(ipa: result.outputURL)
+        defer { pkg.cleanup(); try? FileManager.default.removeItem(at: out) }
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: pkg.appURL.appendingPathComponent(appex.id).path),
+                       "the removed extension is gone from the signed output")
+        if let d = bundledDylib {
+            let after = try MachOFile.read(url: pkg.appURL.appendingPathComponent(main.id)).dylibs
+            XCTAssertFalse(after.contains { $0.path == d.path }, "the stripped dylib reference is gone")
+        }
+        try Codesigner().verify(pkg.appURL)   // still a valid signature
+    }
+}

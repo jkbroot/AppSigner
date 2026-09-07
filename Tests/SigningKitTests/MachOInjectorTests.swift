@@ -67,3 +67,65 @@ final class MachOInjectorTests: XCTestCase {
         }
     }
 }
+
+extension MachOInjectorTests {
+    private func compilePadded(_ arch: String = "arm64") throws -> URL {
+        try compile(arch: arch, headerPad: true)
+    }
+
+    func testInjectsWeakDylib() throws {
+        let bin = try compilePadded()
+        try MachOInjector.inject(dylibPath: "@rpath/Weak.dylib", into: bin, weak: true)
+        let ref = try XCTUnwrap(MachOFile.read(url: bin).dylibs.first { $0.path == "@rpath/Weak.dylib" })
+        XCTAssertTrue(ref.isWeak)
+        XCTAssertTrue(try ProcessRunner().run("/usr/bin/otool", ["-L", bin.path]).stdout.contains("weak"))
+    }
+
+    func testRemovesDylibLeavingOthersIntact() throws {
+        let bin = try compilePadded()
+        try MachOInjector.inject(dylibPath: "@rpath/A.dylib", into: bin)
+        try MachOInjector.inject(dylibPath: "@rpath/B.dylib", into: bin)
+        let before = try MachOFile.read(url: bin).dylibs.count
+
+        try MachOInjector.removeDylib(path: "@rpath/A.dylib", from: bin)
+
+        let after = try MachOFile.read(url: bin).dylibs
+        XCTAssertFalse(after.contains { $0.path == "@rpath/A.dylib" }, "removed reference is gone")
+        XCTAssertTrue(after.contains { $0.path == "@rpath/B.dylib" }, "other injected dylib survives")
+        XCTAssertTrue(after.contains { $0.path.hasPrefix("/usr/lib/") }, "system dylibs survive")
+        XCTAssertEqual(after.count, before - 1)
+        // The binary must still parse cleanly.
+        XCTAssertEqual(try ProcessRunner().run("/usr/bin/otool", ["-l", bin.path]).exitCode, 0)
+    }
+
+    func testSetWeakTogglesReference() throws {
+        let bin = try compilePadded()
+        try MachOInjector.inject(dylibPath: "@rpath/T.dylib", into: bin, weak: false)
+        XCTAssertFalse(try XCTUnwrap(MachOFile.read(url: bin).dylibs.first { $0.path == "@rpath/T.dylib" }).isWeak)
+
+        try MachOInjector.setWeak(true, forDylib: "@rpath/T.dylib", in: bin)
+        XCTAssertTrue(try XCTUnwrap(MachOFile.read(url: bin).dylibs.first { $0.path == "@rpath/T.dylib" }).isWeak)
+
+        try MachOInjector.setWeak(false, forDylib: "@rpath/T.dylib", in: bin)
+        XCTAssertFalse(try XCTUnwrap(MachOFile.read(url: bin).dylibs.first { $0.path == "@rpath/T.dylib" }).isWeak)
+    }
+
+    func testRemoveThrowsWhenDylibNotPresent() throws {
+        let bin = try compilePadded()
+        XCTAssertThrowsError(try MachOInjector.removeDylib(path: "@rpath/Nope.dylib", from: bin)) { error in
+            XCTAssertEqual(error as? MachOInjector.InjectError, .dylibNotFound)
+        }
+    }
+
+    func testRemovalAppliesToEverySliceOfAFatBinary() throws {
+        let a = try compilePadded("arm64"), b = try compilePadded("x86_64")
+        let fat = a.deletingLastPathComponent().appendingPathComponent("fatprog")
+        try ProcessRunner().runThrowing("/usr/bin/lipo", ["-create", a.path, b.path, "-output", fat.path])
+        try MachOInjector.inject(dylibPath: "@rpath/F.dylib", into: fat)
+        XCTAssertTrue(try MachOFile.read(url: fat).dylibs.contains { $0.path == "@rpath/F.dylib" })
+
+        try MachOInjector.removeDylib(path: "@rpath/F.dylib", from: fat)
+        XCTAssertFalse(try ProcessRunner().run("/usr/bin/otool", ["-L", fat.path]).stdout.contains("@rpath/F.dylib"),
+                       "gone from every slice")
+    }
+}

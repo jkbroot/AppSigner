@@ -20,3 +20,13 @@ final class CodesignerTests: XCTestCase {
         XCTAssertEqual(dict?["com.apple.developer.team-identifier"] as? String, "ABCDE12345")
     }
 }
+
+extension CodesignerTests {
+    func testReadsNoEntitlementsFromAnUnsignedBundle() throws {
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("ent-\(UUID().uuidString)")
+        let app = dir.appendingPathComponent("Unsigned.app")
+        try FileManager.default.createDirectory(at: app, withIntermediateDirectories: true)
+        // No signature present -> nil rather than a thrown error.
+        XCTAssertNil(Codesigner().entitlements(of: app))
+    }
+}

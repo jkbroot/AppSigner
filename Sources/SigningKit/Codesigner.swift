@@ -27,6 +27,18 @@ public struct Codesigner {
         try runner.runThrowing("/usr/bin/codesign", args)
     }
 
+    /// Reads the entitlements embedded in an already-signed bundle.
+    /// Returns nil when the bundle is unsigned or has none.
+    public func entitlements(of bundle: URL) -> [String: Any]? {
+        guard let result = try? runner.run("/usr/bin/codesign",
+                                           ["-d", "--entitlements", ":-", "--xml", bundle.path]),
+              result.exitCode == 0,
+              let data = result.stdout.data(using: .utf8), !data.isEmpty,
+              let plist = try? PropertyListSerialization.propertyList(from: data, format: nil)
+        else { return nil }
+        return plist as? [String: Any]
+    }
+
     /// Verifies a signed bundle: `codesign --verify --deep --strict`.
     public func verify(_ bundle: URL) throws {
         try runner.runThrowing("/usr/bin/codesign", ["--verify", "--deep", "--strict", "--verbose=2", bundle.path])
