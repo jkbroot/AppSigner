@@ -1,0 +1,20 @@
+# Swift / SPM
+.build/
+.swiftpm/
+DerivedData/
+*.xcuserstate
+
+# macOS
+.DS_Store
+
+# Build output
+AppSigner.app/
+AppSigner.iconset/
+AppSigner-icon-preview.png
+
+# Never commit signing material or test payloads
+*.mobileprovision
+!Tests/SigningKitTests/Fixtures/sample.mobileprovision
+*.ipa
+*.p12
+*.cer

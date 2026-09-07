@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Name</key>
+    <string>Sample Ad Hoc Profile</string>
+    <key>TeamName</key>
+    <string>Example Team</string>
+    <key>AppIDName</key>
+    <string>Sample Wildcard</string>
+    <key>TeamIdentifier</key>
+    <array>
+        <string>ABCDE12345</string>
+    </array>
+    <key>ExpirationDate</key>
+    <date>2099-01-01T00:00:00Z</date>
+    <key>ProvisionsAllDevices</key>
+    <false/>
+    <key>ProvisionedDevices</key>
+    <array>
+        <string>00000000-0000000000000001</string>
+        <string>00000000-0000000000000002</string>
+    </array>
+    <key>DeveloperCertificates</key>
+    <array>
+        <data>VEVTVENFUlQ=</data>
+    </array>
+    <key>Entitlements</key>
+    <dict>
+        <key>application-identifier</key>
+        <string>ABCDE12345.*</string>
+        <key>com.apple.developer.team-identifier</key>
+        <string>ABCDE12345</string>
+        <key>get-task-allow</key>
+        <false/>
+    </dict>
+</dict>
+</plist>

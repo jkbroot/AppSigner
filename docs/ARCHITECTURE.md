@@ -1,0 +1,62 @@
+# Architecture
+
+AppSigner is split into a reusable, fully tested core library (`SigningKit`) and a thin
+SwiftUI front-end (`AppSigner`). The app target contains almost no logic — it observes a
+view model that drives `SigningKit`.
+
+```
+Sources/
+  SigningKit/            # the engine (pure Swift, unit-tested)
+  AppSigner/             # SwiftUI app (views + view model)
+Tests/
+  SigningKitTests/       # TDD suite + a non-sensitive sample profile fixture
+```
+
+## SigningKit modules
+
+Each type has a single responsibility and is testable in isolation.
+
+| Module | Responsibility |
+|--------|----------------|
+| `ProcessRunner` | Safe subprocess execution (argument arrays, captured or **streamed** output, exit codes). Never uses a shell string. |
+| `ProvisioningProfile` | Parses a `.mobileprovision` by extracting the embedded XML plist from its CMS container — team, expiry, type, app-id, entitlements, developer-certificate SHA‑1s. |
+| `KeychainService` | Enumerates code-signing identities via the Security framework and matches them to a profile's certificates by fingerprint. |
+| `IPAPackage` | Unzips / repacks an IPA, locates `Payload/<App>.app`, reads lightweight app metadata, and orders the signable components (inner → outer). |
+| `InfoPlistEditor` | Reads and edits `Info.plist` (bundle id, version, build, display name), preserving the on-disk format. |
+| `MachOInjector` | Injects an `LC_LOAD_DYLIB` load command into a Mach-O header (thin + fat, 64-bit) natively, using the existing header padding. |
+| `IconInstaller` | Renders the standard iOS icon PNG sizes with CoreGraphics/ImageIO and wires them into `Info.plist`, overriding an `Assets.car` icon by loose PNGs. |
+| `Codesigner` | Builds an entitlements plist from the profile and runs `codesign` per component, then verifies. |
+| `DeviceService` | Lists connected devices and installs an IPA via libimobiledevice, resolving tool paths explicitly. |
+| `HomebrewService` | Detects Homebrew, reads tool versions, checks `brew outdated`, and installs/upgrades formulae. |
+| `GitHubReleaseService` | Fetches the latest release of a repo, picks a binary asset, downloads and extracts it (used for the legacy `optool` link). |
+| `ToolCatalog` / `ToolsInspector` | Describes each external tool and computes its runtime status for the Tools panel. |
+| `SigningPipeline` | Orchestrates the whole run and emits ordered progress events. |
+
+## Signing pipeline
+
+`SigningPipeline.sign(_:progress:)`:
+
+1. Parse the profile; fail fast if it is expired or the selected identity is not one of
+   the profile's certificates.
+2. Unpack the IPA into a temp working directory (cleaned up via `defer`).
+3. Apply `Info.plist` edits (id / version / name).
+4. Remove any existing `*.mobileprovision`, copy the profile to `embedded.mobileprovision`.
+5. Inject dylibs (copy into `Frameworks/`, patch the main executable's load commands).
+6. Replace the icon (before signing, so the icons are sealed by the signature).
+7. Extract entitlements from the profile.
+8. `codesign` every component from the inside out — nested frameworks and dylibs, then app
+   extensions, then the `.app` — applying entitlements only to the app and its extensions.
+9. Verify with `codesign --verify --deep --strict`.
+10. Repack into `<input-basename>_Signed.ipa` (unique).
+
+## Design choices
+
+- **No third-party signing tools.** Everything the engine needs is implemented in Swift or
+  delegated to Apple's own system tools. `codesign` is the one unavoidable external
+  dependency; there is no public alternative for producing an Apple signature.
+- **Explicit identity selection.** The signing certificate is chosen by SHA‑1 rather than
+  relying on an implicit "first identity", which avoids signing with the wrong team.
+- **Absolute paths everywhere.** All external commands receive absolute paths, avoiding a
+  class of path/quoting bugs.
+- **The view layer stays thin.** All testable behavior lives in `SigningKit`; the SwiftUI
+  views only present state and forward user intent.
