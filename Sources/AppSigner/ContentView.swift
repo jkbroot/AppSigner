@@ -13,6 +13,7 @@ struct ContentView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             selectionRows
             if model.iconURL != nil { iconRow }
+            if !model.tweaks.isEmpty { tweaksSection }
             if !model.dylibs.isEmpty { dylibsSection }
             identityRow
             if model.ipaURL != nil { metadataRows }
@@ -86,6 +87,33 @@ struct ContentView: View {
         }
         .padding(.vertical, 7).padding(.horizontal, 10)
         .background(RoundedRectangle(cornerRadius: 8).fill(Color(nsColor: .controlBackgroundColor)))
+    }
+
+    // MARK: Tweak packages
+
+    private var tweaksSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            ForEach(model.tweaks) { tweak in
+                HStack(spacing: 10) {
+                    Image(systemName: "shippingbox.fill").foregroundStyle(.secondary).frame(width: 20)
+                    Text("Tweak").font(.subheadline).frame(width: 64, alignment: .leading)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text("\(tweak.info.name) \(tweak.info.version)").font(.subheadline)
+                            .lineLimit(1).truncationMode(.middle)
+                        Text("\(tweak.dylibs.count) dylib(s)"
+                             + (tweak.bundles.isEmpty ? "" : " · \(tweak.bundles.count) bundle(s)")
+                             + (tweak.targetBundleIDs.isEmpty ? "" : " · targets \(tweak.targetBundleIDs.joined(separator: ", "))"))
+                            .font(.caption2).foregroundStyle(.secondary)
+                            .lineLimit(1).truncationMode(.middle)
+                    }
+                    Spacer()
+                    Button { model.removeTweak(tweak) } label: { Image(systemName: "xmark.circle.fill") }
+                        .buttonStyle(.borderless).foregroundStyle(.secondary).help("Remove")
+                }
+                .padding(.vertical, 7).padding(.horizontal, 10)
+                .background(RoundedRectangle(cornerRadius: 8).fill(Color(nsColor: .controlBackgroundColor)))
+            }
+        }
     }
 
     // MARK: Dylibs
@@ -280,14 +308,14 @@ struct ContentView: View {
     // MARK: File picker (accepts either type, multiple)
 
     fileprivate static func pickFiles(onPick: @escaping ([URL]) -> Void) {
-        let types = ["ipa", "mobileprovision", "dylib", "png", "jpg", "jpeg", "heic"]
+        let types = ["ipa", "mobileprovision", "dylib", "deb", "png", "jpg", "jpeg", "heic"]
             .compactMap { UTType(filenameExtension: $0) }
         let panel = NSOpenPanel()
         panel.allowedContentTypes = types.isEmpty ? [.data] : types
         panel.allowsMultipleSelection = true
         panel.canChooseDirectories = false
         panel.prompt = "Add"
-        panel.message = "Choose an .ipa, .mobileprovision, .dylib and/or an icon image"
+        panel.message = "Choose an .ipa, .mobileprovision, .dylib, .deb and/or an icon image"
         if panel.runModal() == .OK { onPick(panel.urls) }
     }
 }
@@ -305,7 +333,7 @@ private struct UnifiedDropZone: View {
                 Image(systemName: "arrow.down.doc.fill")
                     .font(.system(size: 22))
                     .foregroundStyle(targeted ? Color.accentColor : .secondary)
-                Text("Drag .ipa · .mobileprovision · .dylib · icon here")
+                Text("Drag .ipa · .mobileprovision · .dylib · .deb · icon here")
                     .font(.subheadline).foregroundStyle(.primary)
                 Text("or click to choose — files are sorted automatically")
                     .font(.caption).foregroundStyle(.secondary)

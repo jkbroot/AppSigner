@@ -26,6 +26,7 @@ Each type has a single responsibility and is testable in isolation.
 | `MachOFile` | Generic Mach-O reader: walks thin/fat files and 32/64-bit slices, reporting architectures, FairPlay state and every dylib reference (load / weak / reexport / upward). |
 | `MachOInjector` | Injects, **removes** and re-flags dylib load commands natively. Injection writes into the header padding; removal compacts the commands and re-zeroes the freed tail, so file size and section offsets never change. |
 | `BundleInspector` | Scans any `.app`: finds every Mach-O, classifies each dylib reference (system / bundled / jailbreak / missing) resolving `@rpath`, `@executable_path` and `@loader_path`, builds a referrer graph, and lists removable vs protected entries with sizes. |
+| `DebPackage` | Reads a Cydia/Sileo `.deb`: unpacks the `ar` container and payload with system `tar` (gzip/xz/bzip2/zstd auto-detected), parses the control metadata, and finds tweak dylibs, resource bundles and the target bundle ids from each tweak's filter plist. |
 | `BundleEditor` | Applies removals and dylib edits to an unpacked bundle, validating up front and refusing protected paths or paths escaping the bundle. |
 | `PreflightValidator` | Pure, app-agnostic checks run before signing; findings are advisory and never block a run. |
 | `IconInstaller` | Renders the standard iOS icon PNG sizes with CoreGraphics/ImageIO and wires them into `Info.plist`, overriding an `Assets.car` icon by loose PNGs. |
@@ -47,8 +48,8 @@ Each type has a single responsibility and is testable in isolation.
 4. Remove any existing `*.mobileprovision`, copy the profile to `embedded.mobileprovision`.
 5. Apply bundle edits: strip selected dylib load commands, weaken others, delete selected
    entries (extensions, watch app, frameworks, resources).
-6. Inject dylibs (copy into `Frameworks/`, patch the main executable's load commands),
-   weak-linked by default.
+6. Copy tweak resource bundles into the app root, then inject dylibs (copy into
+   `Frameworks/`, patch the main executable's load commands), weak-linked by default.
 7. Replace the icon (before signing, so the icons are sealed by the signature).
 8. Extract entitlements from the profile.
 9. `codesign` every component from the inside out — nested frameworks and dylibs, then app

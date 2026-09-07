@@ -1,6 +1,18 @@
 import Foundation
 import SigningKit
 
+/// A tweak package (.deb) the user loaded.
+struct LoadedTweak: Identifiable {
+    let id = UUID()
+    let info: DebPackage.Info
+    let dylibs: [URL]
+    let bundles: [URL]
+    let targetBundleIDs: [String]
+    let requiresSubstrate: Bool
+    /// Temporary extraction directory, removed when the tweak is dropped.
+    let root: URL
+}
+
 /// One line in the process screen.
 struct ProcessStep: Identifiable, Equatable {
     enum Status { case pending, active, done, failed }
@@ -30,19 +42,26 @@ final class SignerViewModel: ObservableObject {
     // Replacement icon
     @Published var iconURL: URL?
 
+    // Tweak packages (.deb)
+    @Published var tweaks: [LoadedTweak] = []
+    var resourceBundles: [URL] { tweaks.flatMap(\.bundles) }
+
     // Pre-flight
     @Published var showPreflight = false
     @Published private(set) var originalEntitlements: [String: Any]?
 
     /// Recomputed on every state change — validation is pure and cheap.
     var findings: [PreflightFinding] {
-        PreflightValidator().validate(PreflightInput(
+        var input = PreflightInput(
             report: report,
             profile: profile,
             identitySHA1: selectedIdentitySHA1,
             bundleID: bundleID.isEmpty ? nil : bundleID,
             deviceUDID: installAfterSign ? selectedDeviceUDID : nil,
-            originalEntitlements: originalEntitlements))
+            originalEntitlements: originalEntitlements)
+        input.tweakTargetBundleIDs = Array(Set(tweaks.flatMap(\.targetBundleIDs))).sorted()
+        input.tweakRequiresSubstrate = tweaks.contains { $0.requiresSubstrate }
+        return PreflightValidator().validate(input)
     }
     var errorCount: Int { findings.filter { $0.severity == .error }.count }
     var warningCount: Int { findings.filter { $0.severity == .warning }.count }
@@ -399,8 +418,9 @@ final class SignerViewModel: ObservableObject {
         case "ipa": setIPA(url)
         case "mobileprovision": setProfile(url)
         case "dylib": addDylib(url)
+        case "deb": loadTweakPackage(url)
         case "png", "jpg", "jpeg", "heic": iconURL = url
-        default: errorMessage = "Unsupported file: \(url.lastPathComponent) (need .ipa, .mobileprovision, .dylib or an image)"
+        default: errorMessage = "Unsupported file: \(url.lastPathComponent) (need .ipa, .mobileprovision, .dylib, .deb or an image)"
         }
     }
 
@@ -410,6 +430,38 @@ final class SignerViewModel: ObservableObject {
     }
     func removeDylib(_ url: URL) { dylibs.removeAll { $0 == url } }
     func clearIcon() { iconURL = nil }
+
+    /// Extracts a .deb and adds its libraries to the injection list.
+    func loadTweakPackage(_ url: URL) {
+        DispatchQueue.global(qos: .userInitiated).async {
+            let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+                .appendingPathComponent("deb-\(UUID().uuidString)")
+            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            do {
+                let contents = try DebPackage.extract(deb: url, to: dir)
+                let tweak = LoadedTweak(info: contents.info, dylibs: contents.dylibs,
+                                        bundles: contents.bundles,
+                                        targetBundleIDs: contents.targetBundleIDs,
+                                        requiresSubstrate: contents.requiresSubstrate,
+                                        root: dir)
+                DispatchQueue.main.async {
+                    self.tweaks.append(tweak)
+                    for dylib in contents.dylibs { self.addDylib(dylib) }
+                }
+            } catch {
+                try? FileManager.default.removeItem(at: dir)
+                DispatchQueue.main.async {
+                    self.errorMessage = "Could not read \(url.lastPathComponent): \(error.localizedDescription)"
+                }
+            }
+        }
+    }
+
+    func removeTweak(_ tweak: LoadedTweak) {
+        dylibs.removeAll { url in tweak.dylibs.contains(url) }
+        tweaks.removeAll { $0.id == tweak.id }
+        try? FileManager.default.removeItem(at: tweak.root)
+    }
 
     func clearIPA() {
         ipaURL = nil; originalInfo = nil; report = nil; originalEntitlements = nil
@@ -479,6 +531,7 @@ final class SignerViewModel: ObservableObject {
         let request = SigningRequest(ipa: ipaURL, profileURL: profileURL,
                                      identitySHA1: sha1, edits: currentEdits(),
                                      dylibs: dylibs, iconImage: iconURL,
+                                     resourceBundles: resourceBundles,
                                      bundleEdits: bundleEdits, injectWeak: injectWeak,
                                      outputURL: nil)
         let shouldInstall = installAfterSign && deviceToolsAvailable

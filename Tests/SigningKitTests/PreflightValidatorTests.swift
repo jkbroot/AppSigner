@@ -131,3 +131,37 @@ final class PreflightValidatorTests: XCTestCase {
         XCTAssertEqual(severities.first, .error)
     }
 }
+
+extension PreflightValidatorTests {
+    private func input(tweakTargets: [String] = [], needsSubstrate: Bool = false,
+                       items: [BundleItem] = []) -> PreflightInput {
+        var i = PreflightInput(report: report(items: items), profile: profile(),
+                               identitySHA1: "AAAA", bundleID: "com.x.app")
+        i.tweakTargetBundleIDs = tweakTargets
+        i.tweakRequiresSubstrate = needsSubstrate
+        return i
+    }
+
+    func testWarnsWhenATweakTargetsADifferentApp() {
+        let ids = PreflightValidator().validate(input(tweakTargets: ["com.google.ios.youtube"])).map(\.id)
+        XCTAssertTrue(ids.contains("tweakTargetMismatch"))
+    }
+
+    func testDoesNotWarnWhenTheTweakTargetsThisApp() {
+        let ids = PreflightValidator().validate(input(tweakTargets: ["com.x.app"])).map(\.id)
+        XCTAssertFalse(ids.contains("tweakTargetMismatch"))
+    }
+
+    func testWarnsWhenSubstrateIsRequiredButAbsent() {
+        XCTAssertTrue(PreflightValidator().validate(input(needsSubstrate: true))
+            .map(\.id).contains("substrateMissing"))
+    }
+
+    func testNoSubstrateWarningWhenTheAppAlreadyBundlesIt() {
+        let substrate = BundleItem(id: "Frameworks/CydiaSubstrate.framework",
+                                   name: "CydiaSubstrate.framework", kind: .framework,
+                                   sizeBytes: 1, isProtected: false, warning: nil)
+        XCTAssertFalse(PreflightValidator().validate(input(needsSubstrate: true, items: [substrate]))
+            .map(\.id).contains("substrateMissing"))
+    }
+}

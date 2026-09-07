@@ -38,6 +38,11 @@ install — the standard [libimobiledevice](https://libimobiledevice.org) suite.
 - **Native dylib injection** — adds an `LC_LOAD_DYLIB` command straight into the Mach-O
   header (thin **and** fat binaries), weak-linked by default so a missing library can
   never crash the app. No `optool` or external injector.
+- **Tweak packages (`.deb`)** — drop a Cydia/Sileo package and AppSigner unpacks it using
+  nothing but macOS' own `tar`: it reads the control metadata, finds the tweak libraries
+  and resource bundles in both the classic and **rootless** (`/var/jb`) layouts, injects
+  the libraries, copies the bundles into the app, and reads the package's filter to tell
+  you which app the tweak actually targets.
 - **IPA explorer & dylib manager** — scans every Mach-O in the bundle (main app, app
   extensions, frameworks, dylibs, watch app), lists each library reference with its
   state (weak/strong, bundled/missing/jailbreak) and who else uses it, and lets you
@@ -47,7 +52,8 @@ install — the standard [libimobiledevice](https://libimobiledevice.org) suite.
   or soon-to-expire profiles, an identity the profile does not authorize, a bundle id
   that a non-wildcard profile will not cover, extensions that need their own profiles,
   a connected device that is not provisioned, missing libraries, jailbreak-only paths,
-  a missing arm64 slice, and entitlements your profile will drop.
+  a missing arm64 slice, entitlements your profile will drop, a tweak that targets a
+  different app, and a tweak that needs Substrate the app does not bundle.
 - **Icon replacement** — generates the standard iOS icon sizes and overrides the app
   icon, including icons compiled into `Assets.car` (see [notes](#notes--limitations)).
 - **Metadata editing** — change the Bundle ID, display name, version and build number.
@@ -86,6 +92,7 @@ You can also open `Package.swift` in Xcode and run the `AppSigner` target.
    - `.ipa` → the app to sign
    - `.mobileprovision` → the provisioning profile
    - `.dylib` → libraries to inject
+   - `.deb` → a tweak package (its libraries and resource bundles are added for you)
    - an image (`.png`/`.jpg`/…) → the replacement icon
 2. AppSigner reads your Keychain and selects the identity that matches the profile.
 3. Optionally edit the **Bundle ID / name / version / build**.
@@ -105,6 +112,7 @@ directory that is always cleaned up:
 ```
 unpack IPA  ->  edit Info.plist        ->  embed provisioning profile
             ->  apply bundle edits      (strip dylib references / delete entries)
+            ->  add tweak resource bundles
             ->  inject dylibs (weak)    ->  replace icon
             ->  extract entitlements    ->  codesign each component
                 (inner → outer: frameworks, dylibs, app extensions, then the .app)

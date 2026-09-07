@@ -7,6 +7,8 @@ public struct SigningRequest {
     public var edits: InfoPlistEdits
     public var dylibs: [URL]
     public var iconImage: URL?
+    /// Tweak resource bundles (e.g. extracted from a .deb) copied into the app root.
+    public var resourceBundles: [URL]
     /// Removals / weak-flag changes applied to the unpacked bundle before signing.
     public var bundleEdits: BundleEdits
     /// Inject new dylibs as weak references so a missing file cannot crash the app.
@@ -14,11 +16,12 @@ public struct SigningRequest {
     public var outputURL: URL?
     public init(ipa: URL, profileURL: URL, identitySHA1: String,
                 edits: InfoPlistEdits = .init(), dylibs: [URL] = [],
-                iconImage: URL? = nil, bundleEdits: BundleEdits = .init(),
+                iconImage: URL? = nil, resourceBundles: [URL] = [],
+                bundleEdits: BundleEdits = .init(),
                 injectWeak: Bool = true, outputURL: URL? = nil) {
         self.ipa = ipa; self.profileURL = profileURL; self.identitySHA1 = identitySHA1
         self.edits = edits; self.dylibs = dylibs; self.iconImage = iconImage
-        self.bundleEdits = bundleEdits; self.injectWeak = injectWeak; self.outputURL = outputURL
+        self.resourceBundles = resourceBundles; self.bundleEdits = bundleEdits; self.injectWeak = injectWeak; self.outputURL = outputURL
     }
 }
 
@@ -118,6 +121,12 @@ public struct SigningPipeline {
 
         if !request.bundleEdits.isEmpty {
             try BundleEditor().apply(request.bundleEdits, to: app) { line in
+                progress?(.editingBundle(line))
+            }
+        }
+
+        if !request.resourceBundles.isEmpty {
+            try BundleEditor().installResourceBundles(request.resourceBundles, into: app) { line in
                 progress?(.editingBundle(line))
             }
         }

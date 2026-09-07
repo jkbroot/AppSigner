@@ -87,6 +87,18 @@ public struct BundleEditor {
         }
     }
 
+    /// Copies tweak resource bundles (from a `.deb`, say) into the app root, replacing
+    /// any existing bundle of the same name. Done before signing so they are sealed.
+    public func installResourceBundles(_ bundles: [URL], into appURL: URL,
+                                       progress: ((String) -> Void)? = nil) throws {
+        for bundle in bundles {
+            let destination = appURL.appendingPathComponent(bundle.lastPathComponent)
+            progress?("Adding \(bundle.lastPathComponent)")
+            try? FileManager.default.removeItem(at: destination)
+            try FileManager.default.copyItem(at: bundle, to: destination)
+        }
+    }
+
     // MARK: Helpers
 
     private func mainExecutableName(appURL: URL) -> String {

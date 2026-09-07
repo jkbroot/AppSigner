@@ -25,6 +25,10 @@ public struct PreflightInput {
     public var deviceUDID: String?
     /// Entitlements the app is signed with today, used to spot ones the profile will drop.
     public var originalEntitlements: [String: Any]?
+    /// Bundle ids that the loaded tweak packages declare they target.
+    public var tweakTargetBundleIDs: [String] = []
+    /// A loaded tweak package depends on Substrate / ElleKit.
+    public var tweakRequiresSubstrate = false
 
     public init(report: BundleReport? = nil, profile: ProvisioningProfile? = nil,
                 identitySHA1: String? = nil, bundleID: String? = nil,
@@ -83,6 +87,22 @@ public struct PreflightValidator {
             if !jailbreak.isEmpty {
                 add("jailbreakReferences", .warning, "\(jailbreak.count) jailbreak-only reference\(jailbreak.count == 1 ? "" : "s")",
                     "These paths only exist on a jailbroken device: \(names(jailbreak)).")
+            }
+        }
+
+        // --- Tweak packages ---
+        if !input.tweakTargetBundleIDs.isEmpty, let bundleID = input.bundleID,
+           !input.tweakTargetBundleIDs.contains(bundleID) {
+            add("tweakTargetMismatch", .warning, "Tweak targets a different app",
+                "The package declares it patches \(input.tweakTargetBundleIDs.joined(separator: ", ")), but you are signing '\(bundleID)'. It will load and do nothing.")
+        }
+        if input.tweakRequiresSubstrate {
+            let hasSubstrate = (input.report?.items ?? []).contains {
+                $0.name.lowercased().contains("substrate") || $0.name.lowercased().contains("ellekit")
+            }
+            if !hasSubstrate {
+                add("substrateMissing", .warning, "Tweak needs Substrate, which the app does not bundle",
+                    "This package depends on CydiaSubstrate / ElleKit. On a non-jailbroken device the tweak will not run unless the app already ships a Substrate replacement.")
             }
         }
 

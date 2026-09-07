@@ -90,3 +90,33 @@ final class BundleEditorTests: XCTestCase {
         XCTAssertEqual(try dylibs(app.appendingPathComponent("Demo")), before)
     }
 }
+
+extension BundleEditorTests {
+    func testInstallsResourceBundlesIntoTheAppRoot() throws {
+        let app = try makeApp()
+        let src = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("res-\(UUID().uuidString)/Tweak.bundle")
+        try fm.createDirectory(at: src, withIntermediateDirectories: true)
+        try Data("R".utf8).write(to: src.appendingPathComponent("data.txt"))
+
+        try BundleEditor().installResourceBundles([src], into: app)
+
+        let installed = app.appendingPathComponent("Tweak.bundle/data.txt")
+        XCTAssertTrue(fm.fileExists(atPath: installed.path), "the bundle lands at the app root")
+    }
+
+    func testReinstallingAResourceBundleReplacesTheOldCopy() throws {
+        let app = try makeApp()
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("res-\(UUID().uuidString)")
+        let src = dir.appendingPathComponent("Tweak.bundle")
+        try fm.createDirectory(at: src, withIntermediateDirectories: true)
+        try Data("v1".utf8).write(to: src.appendingPathComponent("data.txt"))
+        try BundleEditor().installResourceBundles([src], into: app)
+
+        try Data("v2".utf8).write(to: src.appendingPathComponent("data.txt"))
+        try BundleEditor().installResourceBundles([src], into: app)
+
+        let text = try String(contentsOf: app.appendingPathComponent("Tweak.bundle/data.txt"), encoding: .utf8)
+        XCTAssertEqual(text, "v2", "an existing bundle of the same name is replaced")
+    }
+}
