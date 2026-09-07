@@ -18,3 +18,6 @@ AppSigner-icon-preview.png
 *.ipa
 *.p12
 *.cer
+
+# Release archives (attached to GitHub releases, not tracked)
+AppSigner-*-macOS.zip
