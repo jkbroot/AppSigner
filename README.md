@@ -22,6 +22,10 @@ depend on any third‑party re-signing tools. The only external programs it call
 Apple's own system tools (`codesign`, `zip`/`unzip`) and — for the optional on-device
 install — the standard [libimobiledevice](https://libimobiledevice.org) suite.
 
+<div align="center">
+  <img src="docs/screenshot.png" width="520" alt="AppSigner main window" />
+</div>
+
 ---
 
 ## Features
