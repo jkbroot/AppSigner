@@ -60,7 +60,7 @@ struct PlistEditorView: View {
             }
         }
         .padding(20)
-        .frame(width: 600, height: 560)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     // MARK: Curated options

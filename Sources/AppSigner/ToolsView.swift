@@ -58,11 +58,11 @@ struct ToolsView: View {
                         .disabled(model.toolBusy)
                 }
                 Spacer()
-                Button("Close") { dismiss() }.keyboardShortcut(.defaultAction).disabled(model.toolBusy)
+                Button("Done") { dismiss() }.keyboardShortcut(.defaultAction).disabled(model.toolBusy)
             }
         }
         .padding(20)
-        .frame(width: 500, height: 460)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear { model.refreshToolStatuses() }
     }
 }

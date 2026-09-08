@@ -194,6 +194,39 @@ final class SignerViewModel: ObservableObject {
         customPlistValues.removeAll()
     }
 
+    // Method patches (Flex-style return-value overrides, applied via a generated dylib)
+    @Published var patches: [MethodPatch] = []
+    func addPatch(_ patch: MethodPatch) {
+        patches.removeAll { $0.className == patch.className && $0.selector == patch.selector }
+        patches.append(patch)
+    }
+    func removePatch(_ patch: MethodPatch) { patches.removeAll { $0.id == patch.id } }
+
+    // Binary / class explorer (static analysis of the app's main binary)
+    @Published var showClassExplorer = false
+    @Published var classDumpLoading = false
+    @Published var classDumpReport: ClassDumpReport?
+
+    func exploreBinary() {
+        guard let ipaURL, !classDumpLoading else { return }
+        classDumpLoading = true; classDumpReport = nil
+        DispatchQueue.global(qos: .userInitiated).async {
+            var report: ClassDumpReport?
+            if let pkg = try? IPAPackage.unpack(ipa: ipaURL) {
+                if let exe = try? InfoPlistEditor(url: pkg.appURL.appendingPathComponent("Info.plist"))
+                    .string(forKey: "CFBundleExecutable") ?? nil {
+                    report = try? MachOClassDump.analyze(url: pkg.appURL.appendingPathComponent(exe))
+                }
+                pkg.cleanup()
+            }
+            DispatchQueue.main.async {
+                self.classDumpReport = report
+                self.classDumpLoading = false
+                if report == nil { self.errorMessage = "Could not read the binary." }
+            }
+        }
+    }
+
     // Developer tools (injectable debuggers such as FLEX)
     @Published var showDevTools = false
     @Published var devToolReady: [String: Bool] = [:]      // tool id -> ready
@@ -427,7 +460,21 @@ final class SignerViewModel: ObservableObject {
 
     // MARK: Inputs
 
-    func onAppear() { refreshIdentities(); refreshDevices(); loadPresets(); refreshDeveloperTools() }
+    func onAppear() {
+        refreshIdentities(); refreshDevices(); loadPresets(); refreshDeveloperTools()
+        routeLaunchArguments()
+    }
+
+    /// Routes any file paths passed on the command line (e.g. launched with an
+    /// `.ipa` or `.mobileprovision`) through the same intake as drag-and-drop.
+    func routeLaunchArguments() {
+        let fm = FileManager.default
+        let files = CommandLine.arguments.dropFirst()
+            .filter { !$0.hasPrefix("-") }
+            .map { URL(fileURLWithPath: $0) }
+            .filter { fm.fileExists(atPath: $0.path) }
+        if !files.isEmpty { acceptFiles(files) }
+    }
 
     func refreshDevices() {
         DispatchQueue.global(qos: .userInitiated).async {
@@ -767,6 +814,7 @@ final class SignerViewModel: ObservableObject {
     // MARK: Signing + process screen
 
     func sign() {
+        guard prepareArtifacts() else { return }
         if isBatch { signBatch(); return }
         guard let ipaURL, let profileURL, let sha1 = selectedIdentitySHA1 else { return }
         steps = []; log = []; signCount = 0
@@ -875,6 +923,26 @@ final class SignerViewModel: ObservableObject {
                 if failed > 0 { self.errorMessage = "\(failed) of \(results.count) app(s) failed." }
                 self.isRunning = false
             }
+        }
+    }
+
+    /// Compiles the patch dylib (if any patches are set) and adds it to the dylibs to
+    /// inject. Returns false only if the patch build failed, so signing is aborted.
+    private var patchDylib: URL?
+    private func prepareArtifacts() -> Bool {
+        dylibs.removeAll { $0.lastPathComponent == PatchDylibBuilder.dylibName }
+        patchDylib = nil
+        guard !patches.isEmpty else { return true }
+        do {
+            let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+                .appendingPathComponent("appsigner-patch-\(UUID().uuidString)")
+            let dylib = try PatchDylibBuilder().build(patches, into: dir)
+            patchDylib = dylib
+            dylibs.append(dylib)
+            return true
+        } catch {
+            errorMessage = "Patch build failed: \(error.localizedDescription)"
+            return false
         }
     }
 

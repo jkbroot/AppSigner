@@ -53,7 +53,7 @@ struct DevToolsView: View {
             }
         }
         .padding(20)
-        .frame(width: 600, height: 520)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear { model.refreshDeveloperTools() }
     }
 

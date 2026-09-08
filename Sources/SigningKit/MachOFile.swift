@@ -106,6 +106,32 @@ enum MachO {
         return [Slice(offset: 0, magic: magic)]
     }
 
+    /// Calls `body` for each section in a slice: (segment, section, fileOffset, size).
+    static func forEachSection(_ data: Data, slice: Slice,
+                               _ body: (String, String, Int, Int) throws -> Void) throws {
+        try forEachCommand(data, slice: slice) { cmd, _, at in
+            guard cmd == 0x19 else { return }          // LC_SEGMENT_64
+            let nsects = Int(try u32(data, at + 64))
+            var sp = at + 72
+            for _ in 0..<nsects {
+                let sectname = cString(data, at: sp, limit: 16)
+                let segname = cString(data, at: sp + 16, limit: 16)
+                let offset = Int(try u32(data, sp + 48))
+                let size = Int(try u64(data, sp + 40))
+                try body(segname, sectname, offset, size)
+                sp += 80
+            }
+        }
+    }
+
+    /// The 64-bit slice best suited for reading metadata (prefers arm64).
+    static func primarySlice(in data: Data) throws -> Slice? {
+        let slices = try slices(in: data).filter { $0.is64 }
+        return slices.first { s in
+            (try? u32(data, s.offset + 4)) == 0x0100_000C     // CPU_TYPE_ARM64
+        } ?? slices.first
+    }
+
     /// Calls `body` for each load command in a slice: (command, cmdsize, absolute offset).
     static func forEachCommand(_ data: Data, slice: Slice,
                                _ body: (UInt32, Int, Int) throws -> Void) throws {

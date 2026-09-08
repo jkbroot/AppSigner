@@ -6,12 +6,13 @@ struct AppSignerApp: App {
 
     var body: some Scene {
         WindowGroup("AppSigner") {
-            ContentView()
+            RootView()
                 .environmentObject(model)
-                .frame(minWidth: 460, minHeight: 560)
                 .onAppear { model.onAppear() }
+                .onOpenURL { model.acceptFiles([$0]) }
         }
         .windowStyle(.titleBar)
+        .windowToolbarStyle(.unified)
         .windowResizability(.contentMinSize)
     }
 }

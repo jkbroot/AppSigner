@@ -198,3 +198,48 @@ extension SigningPipelineTests {
         try Codesigner().verify(pkg.appURL)   // still a valid signature
     }
 }
+
+extension SigningPipelineTests {
+    /// Full patch flow: pick a real class, build the patch dylib, inject and sign.
+    func testSignsWithAGeneratedPatchDylibEndToEnd() throws {
+        guard ProcessInfo.processInfo.environment["APPSIGNER_INTEGRATION"] == "1" else {
+            throw XCTSkip("set APPSIGNER_INTEGRATION=1")
+        }
+        let profileURL = Fixtures.profileURL
+        let ipa = try XCTUnwrap(Fixtures.sourceIPAs().first)
+        let profile = try ProvisioningProfile.parse(data: Data(contentsOf: profileURL))
+        let identity = try XCTUnwrap(KeychainService.identities(
+            try KeychainService().listCodeSigningIdentities(),
+            matchingCertificateSHA1s: profile.developerCertificateSHA1s).first)
+
+        // Pick a real class discovered by the explorer, and patch a plausible getter.
+        let pkg = try IPAPackage.unpack(ipa: ipa)
+        let exe = try XCTUnwrap(try InfoPlistEditor(url: pkg.appURL.appendingPathComponent("Info.plist"))
+            .string(forKey: "CFBundleExecutable"))
+        let className = try XCTUnwrap(MachOClassDump.classNames(url: pkg.appURL.appendingPathComponent(exe))
+            .first { $0.lowercased().contains("premium") })
+        pkg.cleanup()
+        print("patching \(className).isEnabled -> YES")
+
+        let buildDir = Fixtures.workspaceRoot.appendingPathComponent(".patchbuild-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: buildDir) }
+        let dylib = try PatchDylibBuilder().build(
+            [MethodPatch(className: className, selector: "isEnabled", value: .boolean(true))],
+            into: buildDir)
+
+        let out = Fixtures.workspaceRoot.appendingPathComponent("PatchTest_Signed.ipa")
+        try? FileManager.default.removeItem(at: out)
+        let result = try SigningPipeline().sign(
+            SigningRequest(ipa: ipa, profileURL: profileURL, identitySHA1: identity.sha1,
+                           dylibs: [dylib], outputURL: out),
+            progress: { print("• \($0)") })
+
+        let signed = try IPAPackage.unpack(ipa: result.outputURL)
+        defer { signed.cleanup(); try? FileManager.default.removeItem(at: out) }
+        XCTAssertTrue(FileManager.default.fileExists(atPath: signed.appURL.appendingPathComponent("Frameworks/AppSignerPatches.dylib").path))
+        let refs = try MachOFile.read(url: signed.appURL.appendingPathComponent(exe)).dylibs
+        XCTAssertTrue(refs.contains { $0.path.contains("AppSignerPatches") })
+        try Codesigner().verify(signed.appURL)
+        print("  ✅ patch dylib injected and the app verifies")
+    }
+}

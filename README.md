@@ -66,6 +66,15 @@ install — the standard [libimobiledevice](https://libimobiledevice.org) suite.
   state (weak/strong, bundled/missing/jailbreak) and who else uses it, and lets you
   **remove references, make them weak, or delete whole bundle entries** — app
   extensions, watch apps, frameworks, resource bundles, localizations — during signing.
+- **Binary explorer (class-dump)** — reads the Objective-C class and method names straight
+  out of the main binary's `__objc_classname` / `__objc_methname` sections in pure Swift,
+  so it works on modern chained-fixups binaries without loading them. Search tens of
+  thousands of classes and selectors to find the exact method you want to change.
+- **Method patches** — override what a method returns without touching its code: pick a
+  class and selector, choose the return value (yes/no, number, text or null), and AppSigner
+  generates a small hook dylib, **compiles it from source on your Mac**, and injects it
+  before signing — so a check like "is jailbroken" or "is subscribed" can be forced to a
+  fixed answer. Patches are listed with the additions and removed with one click.
 - **Pre-flight checks** — before you sign, it flags FairPlay-encrypted binaries, expired
   or soon-to-expire profiles, an identity the profile does not authorize, a bundle id
   that a non-wildcard profile will not cover, extensions that need their own profiles,
@@ -118,7 +127,8 @@ You can also open `Package.swift` in Xcode and run the `AppSigner` target.
 ## Usage
 
 1. **Drop your files** onto the single drop zone — the app sorts them by type
-   automatically:
+   automatically (you can also open an `.ipa` or `.mobileprovision` straight into the app
+   from Finder):
    - `.ipa` → the app to sign (drop several to queue a batch)
    - `.mobileprovision` → the provisioning profile
    - `.dylib` → libraries to inject
@@ -127,9 +137,11 @@ You can also open `Package.swift` in Xcode and run the `AppSigner` target.
    - an image (`.png`/`.jpg`/…) → the replacement icon
 2. AppSigner reads your Keychain and selects the identity that matches the profile.
 3. Optionally edit the **Bundle ID / name / version / build**.
-4. *(Optional)* open **Contents** to inspect the bundle and tick anything to strip out —
-   tweak libraries, app extensions, a watch app, large resources — and review the
-   **pre-flight** findings above the Sign button.
+4. *(Optional)* use the **top toolbar** to inspect and extend the app: **Contents** to
+   strip out tweak libraries, app extensions, a watch app or large resources; **Binary
+   Explorer** to browse the app's classes and add method patches; **Info.plist** for the
+   advanced compatibility editor; **Developer Tools** to inject a debugger such as FLEX.
+   Review the **pre-flight** findings above the Sign button.
 5. *(Optional)* enable **Install on device after signing** and pick a connected device.
 6. Press **Sign**. A live process screen shows each step: unpack → edit → embed profile →
    inject → replace icon → sign (inner → outer) → verify → repack.

@@ -31,7 +31,7 @@ struct ContentsView: View {
             footer
         }
         .padding(20)
-        .frame(width: 620, height: 560)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear { if model.report == nil { model.inspectIPA() } }
     }
 
