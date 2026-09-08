@@ -21,8 +21,8 @@ Each type has a single responsibility and is testable in isolation.
 | `ProcessRunner` | Safe subprocess execution (argument arrays, captured or **streamed** output, exit codes). Never uses a shell string. |
 | `ProvisioningProfile` | Parses a `.mobileprovision` by extracting the embedded XML plist from its CMS container — team, expiry, type, app-id, entitlements, developer-certificate SHA‑1s. |
 | `KeychainService` | Enumerates code-signing identities via the Security framework and matches them to a profile's certificates by fingerprint. |
-| `IPAPackage` | Unzips / repacks an IPA, locates `Payload/<App>.app`, reads lightweight app metadata, and orders the signable components (inner → outer). |
-| `InfoPlistEditor` | Reads and edits `Info.plist` (bundle id, version, build, display name), preserving the on-disk format. |
+| `IPAPackage` | Unzips / repacks an IPA, locates `Payload/<App>.app`, reads app metadata or the whole `Info.plist` by extracting just that one file, and orders the signable components (inner → outer). |
+| `InfoPlistEditor` | Reads and edits `Info.plist`, preserving the on-disk format: the basics (bundle id, version, build, name) plus minimum iOS version, device families, file sharing, ATS arbitrary loads, removing required capabilities, URL-scheme prefixing, and a raw typed key editor (`PlistValue`). Refuses to touch protected keys. |
 | `MachOFile` | Generic Mach-O reader: walks thin/fat files and 32/64-bit slices, reporting architectures, FairPlay state and every dylib reference (load / weak / reexport / upward). |
 | `MachOInjector` | Injects, **removes** and re-flags dylib load commands natively. Injection writes into the header padding; removal compacts the commands and re-zeroes the freed tail, so file size and section offsets never change. |
 | `BundleInspector` | Scans any `.app`: finds every Mach-O, classifies each dylib reference (system / bundled / jailbreak / missing) resolving `@rpath`, `@executable_path` and `@loader_path`, builds a referrer graph, and lists removable vs protected entries with sizes. |

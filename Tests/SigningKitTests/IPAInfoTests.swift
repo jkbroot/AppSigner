@@ -30,3 +30,29 @@ final class IPAInfoTests: XCTestCase {
         XCTAssertEqual(appInfo.appBundleName, "Demo.app")
     }
 }
+
+extension IPAInfoTests {
+    func testReadsTheWholeInfoPlistWithoutFullUnpack() throws {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("ipaplist-\(UUID().uuidString)")
+        let app = root.appendingPathComponent("Payload/Demo.app")
+        try fm.createDirectory(at: app, withIntermediateDirectories: true)
+        let info: [String: Any] = [
+            "CFBundleIdentifier": "com.demo.app",
+            "MinimumOSVersion": "15.0",
+            "UIDeviceFamily": [1],
+            "CFBundleURLTypes": [["CFBundleURLSchemes": ["demo"]]],
+        ]
+        try PropertyListSerialization.data(fromPropertyList: info, format: .binary, options: 0)
+            .write(to: app.appendingPathComponent("Info.plist"))
+        try Data("bin".utf8).write(to: app.appendingPathComponent("Demo"))
+        let ipa = root.appendingPathComponent("demo.ipa")
+        try ProcessRunner().runThrowing("/usr/bin/zip", ["-r", "-q", "demo.ipa", "Payload"], cwd: root)
+
+        let dict = try IPAPackage.readInfoPlistDictionary(ipa: ipa)
+        XCTAssertEqual(dict["CFBundleIdentifier"] as? String, "com.demo.app")
+        XCTAssertEqual(dict["MinimumOSVersion"] as? String, "15.0")
+        XCTAssertEqual(dict["UIDeviceFamily"] as? [Int], [1])
+        XCTAssertNotNil(dict["CFBundleURLTypes"], "nested structures come through intact")
+    }
+}

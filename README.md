@@ -57,6 +57,11 @@ install — the standard [libimobiledevice](https://libimobiledevice.org) suite.
 - **Icon replacement** — generates the standard iOS icon sizes and overrides the app
   icon, including icons compiled into `Assets.car` (see [notes](#notes--limitations)).
 - **Metadata editing** — change the Bundle ID, display name, version and build number.
+- **Advanced `Info.plist` editor** — lower the **minimum iOS version**, enable **iPad**
+  (`UIDeviceFamily`), turn on **file sharing**, allow insecure HTTP, drop
+  `UIRequiredDeviceCapabilities` to widen device support, and **prefix the app's URL
+  schemes** so a second copy does not clash — plus a raw key editor with typed values
+  (text / yes-no / number / list). `CFBundleExecutable` is protected and cannot be broken.
 - **On-device install** — install the signed IPA over USB via `ideviceinstaller`.
 - **External-tools manager** — detect, install and update the optional tools (Homebrew
   formulae, plus a GitHub-releases link for the legacy `optool`).

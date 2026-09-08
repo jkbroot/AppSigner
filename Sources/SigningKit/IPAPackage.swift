@@ -76,8 +76,15 @@ extension IPAPackage {
         public let bundleVersion: String
         public let appBundleName: String
     }
-    /// Reads app metadata by extracting only `Payload/<App>.app/Info.plist` — avoids a full unpack.
-    public static func readAppInfo(ipa: URL, runner: ProcessRunner = .init()) throws -> AppInfo {
+    /// Reads the app's whole `Info.plist` by extracting just that one file — no full unpack.
+    public static func readInfoPlistDictionary(ipa: URL,
+                                               runner: ProcessRunner = .init()) throws -> [String: Any] {
+        try readInfoPlist(ipa: ipa, runner: runner).dict
+    }
+
+    /// Extracts only `Payload/<App>.app/Info.plist` and returns it with the app bundle name.
+    private static func readInfoPlist(ipa: URL, runner: ProcessRunner)
+    throws -> (dict: [String: Any], appBundleName: String) {
         let listing = try runner.runThrowing("/usr/bin/unzip", ["-Z1", ipa.path]).stdout
         guard let entry = listing.split(separator: "\n").map(String.init).first(where: {
             $0.hasPrefix("Payload/") && $0.hasSuffix(".app/Info.plist")
@@ -91,11 +98,16 @@ extension IPAPackage {
         defer { try? FileManager.default.removeItem(at: tmp) }
         try runner.runThrowing("/usr/bin/unzip", ["-q", "-o", ipa.path, entry, "-d", tmp.path])
 
-        let plistURL = tmp.appendingPathComponent(entry)
-        let data = try Data(contentsOf: plistURL)
+        let data = try Data(contentsOf: tmp.appendingPathComponent(entry))
         let dict = (try PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any]) ?? [:]
+        let appBundleName = String(entry.dropFirst("Payload/".count))
+            .replacingOccurrences(of: "/Info.plist", with: "")
+        return (dict, appBundleName)
+    }
 
-        let appBundleName = String(entry.dropFirst("Payload/".count)).replacingOccurrences(of: "/Info.plist", with: "")
+    /// Reads app metadata by extracting only `Payload/<App>.app/Info.plist` — avoids a full unpack.
+    public static func readAppInfo(ipa: URL, runner: ProcessRunner = .init()) throws -> AppInfo {
+        let (dict, appBundleName) = try readInfoPlist(ipa: ipa, runner: runner)
         return AppInfo(
             bundleID: dict["CFBundleIdentifier"] as? String ?? "",
             displayName: (dict["CFBundleDisplayName"] as? String) ?? (dict["CFBundleName"] as? String) ?? "",

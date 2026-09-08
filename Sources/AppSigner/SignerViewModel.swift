@@ -46,6 +46,64 @@ final class SignerViewModel: ObservableObject {
     @Published var tweaks: [LoadedTweak] = []
     var resourceBundles: [URL] { tweaks.flatMap(\.bundles) }
 
+    // Advanced Info.plist editing
+    @Published var showPlistEditor = false
+    @Published var appPlist: [String: Any] = [:]
+    @Published var minimumOSVersion = ""
+    @Published var deviceFamilies: [Int] = []
+    @Published var fileSharingEnabled = false
+    @Published var allowArbitraryLoads = false
+    @Published var removeRequiredCapabilities = false
+    @Published var urlSchemePrefix = ""
+    @Published var removedPlistKeys: Set<String> = []
+    @Published var customPlistValues: [String: PlistValue] = [:]
+
+    private var originalMinimumOS = ""
+    private var originalDeviceFamilies: [Int] = []
+    private var originalFileSharing = false
+    private var originalArbitraryLoads = false
+
+    /// True when anything beyond the basic four fields is pending.
+    var hasAdvancedPlistEdits: Bool {
+        minimumOSVersion != originalMinimumOS
+            || deviceFamilies != originalDeviceFamilies
+            || fileSharingEnabled != originalFileSharing
+            || allowArbitraryLoads != originalArbitraryLoads
+            || removeRequiredCapabilities
+            || !urlSchemePrefix.isEmpty
+            || !removedPlistKeys.isEmpty
+            || !customPlistValues.isEmpty
+    }
+
+    private func loadAppPlist(from ipa: URL) {
+        DispatchQueue.global(qos: .userInitiated).async {
+            let dict = (try? IPAPackage.readInfoPlistDictionary(ipa: ipa)) ?? [:]
+            DispatchQueue.main.async {
+                self.appPlist = dict
+                self.originalMinimumOS = dict["MinimumOSVersion"] as? String ?? ""
+                self.originalDeviceFamilies = dict["UIDeviceFamily"] as? [Int] ?? []
+                self.originalFileSharing = dict["UIFileSharingEnabled"] as? Bool ?? false
+                let ats = dict["NSAppTransportSecurity"] as? [String: Any] ?? [:]
+                self.originalArbitraryLoads = ats["NSAllowsArbitraryLoads"] as? Bool ?? false
+                self.minimumOSVersion = self.originalMinimumOS
+                self.deviceFamilies = self.originalDeviceFamilies
+                self.fileSharingEnabled = self.originalFileSharing
+                self.allowArbitraryLoads = self.originalArbitraryLoads
+            }
+        }
+    }
+
+    func resetAdvancedPlistEdits() {
+        minimumOSVersion = originalMinimumOS
+        deviceFamilies = originalDeviceFamilies
+        fileSharingEnabled = originalFileSharing
+        allowArbitraryLoads = originalArbitraryLoads
+        removeRequiredCapabilities = false
+        urlSchemePrefix = ""
+        removedPlistKeys.removeAll()
+        customPlistValues.removeAll()
+    }
+
     // Pre-flight
     @Published var showPreflight = false
     @Published private(set) var originalEntitlements: [String: Any]?
@@ -465,6 +523,7 @@ final class SignerViewModel: ObservableObject {
 
     func clearIPA() {
         ipaURL = nil; originalInfo = nil; report = nil; originalEntitlements = nil
+        appPlist = [:]; resetAdvancedPlistEdits()
         bundleID = ""; displayName = ""; shortVersion = ""; bundleVersion = ""
         clearContentsSelection()
     }
@@ -475,6 +534,9 @@ final class SignerViewModel: ObservableObject {
         report = nil
         originalEntitlements = nil
         clearContentsSelection()
+        appPlist = [:]
+        resetAdvancedPlistEdits()
+        loadAppPlist(from: url)
         DispatchQueue.global(qos: .userInitiated).async {
             do {
                 let info = try IPAPackage.readAppInfo(ipa: url)
@@ -511,13 +573,26 @@ final class SignerViewModel: ObservableObject {
     }
 
     private func currentEdits() -> InfoPlistEdits {
-        guard let o = originalInfo else { return .init() }
-        return InfoPlistEdits(
-            bundleIdentifier: bundleID != o.bundleID ? bundleID : nil,
-            shortVersion:     shortVersion != o.shortVersion ? shortVersion : nil,
-            bundleVersion:    bundleVersion != o.bundleVersion ? bundleVersion : nil,
-            displayName:      displayName != o.displayName ? displayName : nil
-        )
+        var edits = InfoPlistEdits()
+        if let o = originalInfo {
+            edits.bundleIdentifier = bundleID != o.bundleID ? bundleID : nil
+            edits.shortVersion = shortVersion != o.shortVersion ? shortVersion : nil
+            edits.bundleVersion = bundleVersion != o.bundleVersion ? bundleVersion : nil
+            edits.displayName = displayName != o.displayName ? displayName : nil
+        }
+        if minimumOSVersion != originalMinimumOS, !minimumOSVersion.isEmpty {
+            edits.minimumOSVersion = minimumOSVersion
+        }
+        if deviceFamilies != originalDeviceFamilies, !deviceFamilies.isEmpty {
+            edits.deviceFamilies = deviceFamilies
+        }
+        if fileSharingEnabled != originalFileSharing { edits.fileSharingEnabled = fileSharingEnabled }
+        if allowArbitraryLoads != originalArbitraryLoads { edits.allowArbitraryLoads = allowArbitraryLoads }
+        edits.removeRequiredCapabilities = removeRequiredCapabilities
+        if !urlSchemePrefix.isEmpty { edits.urlSchemePrefix = urlSchemePrefix }
+        edits.removedKeys = Array(removedPlistKeys)
+        edits.customValues = customPlistValues
+        return edits
     }
 
     // MARK: Signing + process screen

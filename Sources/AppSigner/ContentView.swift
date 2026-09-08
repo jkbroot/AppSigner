@@ -29,6 +29,7 @@ struct ContentView: View {
         .sheet(isPresented: $model.showTools) { ToolsView() }
         .sheet(isPresented: $model.showContents) { ContentsView() }
         .sheet(isPresented: $model.showPreflight) { PreflightView() }
+        .sheet(isPresented: $model.showPlistEditor) { PlistEditorView() }
     }
 
     // MARK: Header
@@ -170,6 +171,13 @@ struct ContentView: View {
             HStack(spacing: 10) {
                 EditRow("Version", $model.shortVersion, placeholder: "1.0", labelWidth: 92)
                 EditRow("Build", $model.bundleVersion, placeholder: "1", labelWidth: 48)
+            }
+            HStack(spacing: 8) {
+                Spacer()
+                if model.hasAdvancedPlistEdits {
+                    Text("advanced changes pending").font(.caption2).foregroundStyle(.orange)
+                }
+                Button("Advanced…") { model.showPlistEditor = true }.controlSize(.small)
             }
         }
     }

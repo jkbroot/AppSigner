@@ -1,11 +1,47 @@
 import Foundation
 
+/// A typed value for the raw (advanced) key editor.
+public enum PlistValue: Equatable {
+    case string(String)
+    case bool(Bool)
+    case integer(Int)
+    case stringArray([String])
+
+    var plistObject: Any {
+        switch self {
+        case .string(let v): return v
+        case .bool(let v): return v
+        case .integer(let v): return v
+        case .stringArray(let v): return v
+        }
+    }
+}
+
 /// Edits to apply to an `Info.plist`. `nil` fields are left untouched.
 public struct InfoPlistEdits {
+    // Basics
     public var bundleIdentifier: String?
     public var shortVersion: String?
     public var bundleVersion: String?
     public var displayName: String?
+
+    // Advanced, curated
+    /// `MinimumOSVersion` — lets the app install on older systems (it may still use newer APIs).
+    public var minimumOSVersion: String?
+    /// `UIDeviceFamily`: 1 = iPhone, 2 = iPad.
+    public var deviceFamilies: [Int]?
+    /// `UIFileSharingEnabled` + `LSSupportsOpeningDocumentsInPlace`.
+    public var fileSharingEnabled: Bool?
+    /// `NSAppTransportSecurity.NSAllowsArbitraryLoads`, merged into any existing ATS settings.
+    public var allowArbitraryLoads: Bool?
+    /// Delete `UIRequiredDeviceCapabilities` to widen device compatibility.
+    public var removeRequiredCapabilities = false
+    /// Prefix every `CFBundleURLSchemes` entry so two copies of an app do not clash.
+    public var urlSchemePrefix: String?
+
+    // Advanced, raw
+    public var removedKeys: [String] = []
+    public var customValues: [String: PlistValue] = [:]
 
     public init(bundleIdentifier: String? = nil, shortVersion: String? = nil,
                 bundleVersion: String? = nil, displayName: String? = nil) {
@@ -17,6 +53,9 @@ public struct InfoPlistEdits {
 
     public var isEmpty: Bool {
         bundleIdentifier == nil && shortVersion == nil && bundleVersion == nil && displayName == nil
+            && minimumOSVersion == nil && deviceFamilies == nil && fileSharingEnabled == nil
+            && allowArbitraryLoads == nil && !removeRequiredCapabilities && urlSchemePrefix == nil
+            && removedKeys.isEmpty && customValues.isEmpty
     }
 }
 
@@ -25,11 +64,16 @@ public struct InfoPlistEditor {
     public let url: URL
     public init(url: URL) { self.url = url }
 
-    public enum EditorError: Error, LocalizedError {
+    /// Keys whose loss would break the bundle outright.
+    public static let protectedKeys: Set<String> = ["CFBundleExecutable"]
+
+    public enum EditorError: Error, LocalizedError, Equatable {
         case notADictionary
+        case protectedKey(String)
         public var errorDescription: String? {
             switch self {
             case .notADictionary: return "Info.plist is not a dictionary."
+            case .protectedKey(let k): return "'\(k)' is required by the app and cannot be changed."
             }
         }
     }
@@ -38,8 +82,23 @@ public struct InfoPlistEditor {
         try load().dict[key] as? String
     }
 
+    /// The whole property list, for showing current values in an editor.
+    public func dictionary() throws -> [String: Any] {
+        try load().dict
+    }
+
     public func apply(_ edits: InfoPlistEdits) throws {
+        // Validate before writing anything.
+        for key in edits.removedKeys where Self.protectedKeys.contains(key) {
+            throw EditorError.protectedKey(key)
+        }
+        for key in edits.customValues.keys where Self.protectedKeys.contains(key) {
+            throw EditorError.protectedKey(key)
+        }
+
         var (dict, format) = try load()
+
+        // Basics
         if let v = edits.bundleIdentifier { dict["CFBundleIdentifier"] = v }
         if let v = edits.shortVersion     { dict["CFBundleShortVersionString"] = v }
         if let v = edits.bundleVersion    { dict["CFBundleVersion"] = v }
@@ -47,6 +106,37 @@ public struct InfoPlistEditor {
             dict["CFBundleDisplayName"] = v
             dict["CFBundleName"] = v
         }
+
+        // Curated advanced options
+        if let v = edits.minimumOSVersion { dict["MinimumOSVersion"] = v }
+        if let v = edits.deviceFamilies   { dict["UIDeviceFamily"] = v }
+        if let v = edits.fileSharingEnabled {
+            dict["UIFileSharingEnabled"] = v
+            dict["LSSupportsOpeningDocumentsInPlace"] = v
+        }
+        if let v = edits.allowArbitraryLoads {
+            var ats = dict["NSAppTransportSecurity"] as? [String: Any] ?? [:]
+            ats["NSAllowsArbitraryLoads"] = v
+            dict["NSAppTransportSecurity"] = ats
+        }
+        if edits.removeRequiredCapabilities {
+            dict.removeValue(forKey: "UIRequiredDeviceCapabilities")
+        }
+        if let prefix = edits.urlSchemePrefix, !prefix.isEmpty,
+           let types = dict["CFBundleURLTypes"] as? [[String: Any]] {
+            dict["CFBundleURLTypes"] = types.map { entry -> [String: Any] in
+                var entry = entry
+                if let schemes = entry["CFBundleURLSchemes"] as? [String] {
+                    entry["CFBundleURLSchemes"] = schemes.map { prefix + $0 }
+                }
+                return entry
+            }
+        }
+
+        // Raw edits
+        for key in edits.removedKeys { dict.removeValue(forKey: key) }
+        for (key, value) in edits.customValues { dict[key] = value.plistObject }
+
         let data = try PropertyListSerialization.data(fromPropertyList: dict, format: format, options: 0)
         try data.write(to: url)
     }
