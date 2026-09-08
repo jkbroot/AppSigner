@@ -23,7 +23,7 @@ Apple's own system tools (`codesign`, `zip`/`unzip`) and — for the optional on
 install — the standard [libimobiledevice](https://libimobiledevice.org) suite.
 
 <div align="center">
-  <img src="docs/screenshot.png?v=1.8.0" width="520" alt="AppSigner main window" />
+  <img src="docs/screenshot.png?v=2" width="520" alt="AppSigner main window" />
 </div>
 
 ---
