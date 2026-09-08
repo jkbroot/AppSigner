@@ -151,8 +151,13 @@ sample profile and never require any real signing material.
 
 - **Ad Hoc / Development profiles install only on their provisioned devices.** A device
   whose UDID is not in the profile will refuse the app.
-- **`codesign` is required and cannot be replaced** — there is no public API to produce
-  an Apple code signature; every signing tool ultimately calls `codesign`.
+- **Signing goes through Apple's `codesign` by choice.** Apple publishes no API for
+  producing a code signature, so AppSigner delegates that one step to the system tool.
+  It is *not* true that every signer must: projects like
+  [zsign](https://github.com/zhlynn/zsign) and `ldid` re-implement the signature format
+  themselves, which is how they sign on Linux or Windows. On macOS, Apple's own
+  implementation is the most trustworthy one available, so AppSigner uses it deliberately
+  rather than out of necessity.
 - **Icon / `Assets.car`.** iOS resolves the primary icon from `Info.plist` first, so
   AppSigner overrides the icon by writing loose PNGs for both the standard `AppIcon`
   names *and* the app's existing icon reference names, and by removing `CFBundleIconName`.

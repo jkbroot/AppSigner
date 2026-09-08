@@ -62,8 +62,11 @@ Each type has a single responsibility and is testable in isolation.
 ## Design choices
 
 - **No third-party signing tools.** Everything the engine needs is implemented in Swift or
-  delegated to Apple's own system tools. `codesign` is the one unavoidable external
-  dependency; there is no public alternative for producing an Apple signature.
+  delegated to Apple's own system tools. The signature itself is produced by `codesign`:
+  Apple exposes no public signing API, and while third-party projects (zsign, ldid)
+  do re-implement the signature format — that is what lets them run off macOS — Apple's
+  implementation is the most trustworthy one on this platform, so it is a deliberate
+  choice rather than a hard constraint.
 - **Explicit identity selection.** The signing certificate is chosen by SHA‑1 rather than
   relying on an implicit "first identity", which avoids signing with the wrong team.
 - **Absolute paths everywhere.** All external commands receive absolute paths, avoiding a
