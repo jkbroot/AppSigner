@@ -35,6 +35,8 @@ Each type has a single responsibility and is testable in isolation.
 | `HomebrewService` | Detects Homebrew, reads tool versions, checks `brew outdated`, and installs/upgrades formulae. |
 | `GitHubReleaseService` | Fetches the latest release of a repo, picks a binary asset, downloads and extracts it (used for the legacy `optool` link). |
 | `ToolCatalog` / `ToolsInspector` | Describes each external tool and computes its runtime status for the Tools panel. |
+| `DeveloperTool` / `DeveloperToolCatalog` / `DeveloperToolLibrary` | Describes each injectable developer tool (licence, artifacts, how to trigger it) and tracks which are built on this machine. |
+| `DeveloperToolBuilder` | Clones a tool's own source and builds it with the local Xcode toolchain for iOS arm64 as a dynamic framework, plus a runtime-resolved launcher. Build arguments are pure functions so the recipe is testable without running a build. |
 | `SigningPreset` / `PresetStore` | A reusable, app-agnostic signing configuration persisted as JSON; saving under an existing name replaces it. |
 | `BatchSigner` | Signs a list of requests in order, recording failures and continuing, and reporting per-item progress. Its signing step is injectable so the batch logic is testable without signing. |
 | `SigningPipeline` | Orchestrates the whole run and emits ordered progress events. |

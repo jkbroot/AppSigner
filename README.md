@@ -43,6 +43,13 @@ install — the standard [libimobiledevice](https://libimobiledevice.org) suite.
   resource bundles and **frameworks** in both the classic and **rootless** (`/var/jb`)
   layouts, injects the libraries, copies the bundles and frameworks into the app, and
   reads the package's filter to tell you which app the tweak actually targets.
+- **Developer tools** — an extensible catalog of debuggers you can inject into the app you
+  are signing, starting with [FLEX](https://github.com/FLEXTool/FLEX): browse the view
+  hierarchy, every loaded class, live objects, network traffic and the app sandbox, and edit
+  them while it runs. AppSigner **builds each tool from its own source on your Mac** — it
+  never ships or downloads third-party binaries — or adopts artifacts you built yourself.
+  FLEX comes with a small launcher, built alongside it, that opens FLEX on a three-finger
+  long press in an app that was never built with it.
 - **A profile per app extension** — an extension has its own bundle id, so a non-wildcard
   app profile cannot cover it. Give each `.appex` its own profile and AppSigner embeds it
   inside that extension and signs it with entitlements derived from it, while the app keeps

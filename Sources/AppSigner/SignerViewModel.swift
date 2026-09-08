@@ -194,6 +194,71 @@ final class SignerViewModel: ObservableObject {
         customPlistValues.removeAll()
     }
 
+    // Developer tools (injectable debuggers such as FLEX)
+    @Published var showDevTools = false
+    @Published var devToolReady: [String: Bool] = [:]      // tool id -> ready
+    @Published var addedToolIDs: Set<String> = []
+    @Published var devToolBusy = false
+    @Published var devToolTitle = ""
+    @Published var devToolLog: [String] = []
+    private let toolLibrary = DeveloperToolLibrary()
+
+    var developerTools: [DeveloperTool] { DeveloperToolCatalog.all }
+    func isToolReady(_ tool: DeveloperTool) -> Bool { devToolReady[tool.id] ?? false }
+
+    func refreshDeveloperTools() {
+        var ready: [String: Bool] = [:]
+        for tool in DeveloperToolCatalog.all {
+            ready[tool.id] = toolLibrary.status(for: tool).isReady
+        }
+        devToolReady = ready
+    }
+
+    /// Adds a built tool's artifacts to the current signing inputs.
+    func addTool(_ tool: DeveloperTool) {
+        for framework in toolLibrary.frameworks(for: tool) { addFramework(framework) }
+        for dylib in toolLibrary.dylibs(for: tool) { addDylib(dylib) }
+        addedToolIDs.insert(tool.id)
+    }
+
+    func removeTool(_ tool: DeveloperTool) {
+        for framework in toolLibrary.frameworks(for: tool) { removeFramework(framework) }
+        for dylib in toolLibrary.dylibs(for: tool) { removeDylib(dylib) }
+        addedToolIDs.remove(tool.id)
+    }
+
+    func buildTool(_ tool: DeveloperTool) {
+        devToolBusy = true; devToolTitle = "Building \(tool.name)…"; devToolLog = []
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                try DeveloperToolBuilder().build(tool, into: self.toolLibrary) { line in
+                    DispatchQueue.main.async { if !line.isEmpty { self.devToolLog.append(line) } }
+                }
+                DispatchQueue.main.async {
+                    self.devToolBusy = false; self.refreshDeveloperTools()
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    self.devToolLog.append("❌ \(error.localizedDescription)")
+                    self.devToolBusy = false
+                }
+            }
+        }
+    }
+
+    func importTool(_ tool: DeveloperTool, from folder: URL) {
+        do {
+            try toolLibrary.importArtifacts(for: tool, from: folder)
+            refreshDeveloperTools()
+            if !isToolReady(tool) {
+                errorMessage = "\(folder.lastPathComponent) does not contain "
+                    + tool.artifacts.map(\.fileName).joined(separator: " and ")
+            }
+        } catch {
+            errorMessage = "Could not import: \(error.localizedDescription)"
+        }
+    }
+
     // Pre-flight
     @Published var showPreflight = false
     @Published private(set) var originalEntitlements: [String: Any]?
@@ -362,7 +427,7 @@ final class SignerViewModel: ObservableObject {
 
     // MARK: Inputs
 
-    func onAppear() { refreshIdentities(); refreshDevices(); loadPresets() }
+    func onAppear() { refreshIdentities(); refreshDevices(); loadPresets(); refreshDeveloperTools() }
 
     func refreshDevices() {
         DispatchQueue.global(qos: .userInitiated).async {

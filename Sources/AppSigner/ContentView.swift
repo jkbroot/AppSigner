@@ -34,6 +34,7 @@ struct ContentView: View {
         .sheet(isPresented: $model.showContents) { ContentsView() }
         .sheet(isPresented: $model.showPreflight) { PreflightView() }
         .sheet(isPresented: $model.showPlistEditor) { PlistEditorView() }
+        .sheet(isPresented: $model.showDevTools) { DevToolsView() }
         .alert("Save preset", isPresented: $showSavePreset) {
             TextField("Name", text: $presetName)
             Button("Save") { if !presetName.isEmpty { model.saveCurrentAsPreset(named: presetName) } }
@@ -53,6 +54,9 @@ struct ContentView: View {
             Text("AppSigner").font(.system(size: 16, weight: .bold))
             Text("Re-sign iOS apps").font(.caption).foregroundStyle(.secondary)
             Spacer()
+            Button { model.showDevTools = true } label: { Image(systemName: "hammer") }
+                .buttonStyle(.borderless)
+                .help("Developer tools")
             presetMenu
             Button { model.showTools = true } label: { Image(systemName: "wrench.and.screwdriver") }
                 .buttonStyle(.borderless)
