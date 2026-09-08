@@ -29,6 +29,8 @@ public struct PreflightInput {
     public var tweakTargetBundleIDs: [String] = []
     /// A loaded tweak package depends on Substrate / ElleKit.
     public var tweakRequiresSubstrate = false
+    /// Extensions given their own profile: bundle-relative appex path -> that profile's app-id.
+    public var extensionProfileAppIDs: [String: String] = [:]
 
     public init(report: BundleReport? = nil, profile: ProvisioningProfile? = nil,
                 identitySHA1: String? = nil, bundleID: String? = nil,
@@ -131,9 +133,19 @@ public struct PreflightValidator {
                         "The profile only covers '\(suffix)' but the app will be signed as '\(bundleID)'. Change the Bundle ID or use a wildcard profile.")
                 }
                 let extensions = input.report?.items.filter { $0.kind == .appExtension } ?? []
-                if !extensions.isEmpty {
-                    add("extensionsNeedOwnProfiles", .warning, "\(extensions.count) app extension\(extensions.count == 1 ? "" : "s") with an explicit profile",
-                        "Each extension has its own bundle id and needs its own profile. With this profile they will fail to install — remove them in Contents, or use a wildcard profile.")
+                let uncovered = extensions.filter { input.extensionProfileAppIDs[$0.id] == nil }
+                if !uncovered.isEmpty {
+                    add("extensionsNeedOwnProfiles", .warning, "\(uncovered.count) app extension\(uncovered.count == 1 ? "" : "s") without a profile",
+                        "Each extension has its own bundle id and needs its own profile: \(uncovered.map(\.name).joined(separator: ", ")). Assign one in Contents, remove the extension, or use a wildcard profile.")
+                }
+                // An assigned profile must actually cover that extension's bundle id.
+                for item in extensions {
+                    guard let appID = input.extensionProfileAppIDs[item.id],
+                          let suffix = appIDSuffix(appID, team: profile.teamIdentifier),
+                          suffix != "*", let bundleID = item.bundleID, suffix != bundleID
+                    else { continue }
+                    add("extensionProfileMismatch", .error, "Extension profile does not match",
+                        "\(item.name) is '\(bundleID)' but its assigned profile only covers '\(suffix)'.")
                 }
             }
 

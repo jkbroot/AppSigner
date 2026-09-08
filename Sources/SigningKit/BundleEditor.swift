@@ -132,6 +132,23 @@ public struct BundleEditor {
         }
     }
 
+    /// Installs a provisioning profile inside a nested bundle (an app extension, say),
+    /// replacing any profile already there. Used when an extension needs its own profile
+    /// because the app's profile is not a wildcard.
+    public func embedProfile(_ profile: URL, into bundlePath: String, of appURL: URL,
+                             progress: ((String) -> Void)? = nil) throws {
+        let bundle = try resolve(bundlePath, in: appURL)
+        progress?("Embedding profile in \(bundlePath)")
+        for entry in (try? FileManager.default.contentsOfDirectory(at: bundle,
+                                                                   includingPropertiesForKeys: nil)) ?? []
+        where entry.pathExtension == "mobileprovision" {
+            try? FileManager.default.removeItem(at: entry)
+        }
+        let destination = bundle.appendingPathComponent("embedded.mobileprovision")
+        try? FileManager.default.removeItem(at: destination)
+        try FileManager.default.copyItem(at: profile, to: destination)
+    }
+
     // MARK: Helpers
 
     private func mainExecutableName(appURL: URL) -> String {

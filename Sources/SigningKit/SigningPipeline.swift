@@ -11,6 +11,8 @@ public struct SigningRequest {
     public var resourceBundles: [URL]
     /// Frameworks (e.g. a Substrate shim) copied into the app's Frameworks folder.
     public var frameworks: [URL]
+    /// Extensions that need their own profile: bundle-relative appex path -> profile file.
+    public var extensionProfiles: [String: URL]
     /// Removals / weak-flag changes applied to the unpacked bundle before signing.
     public var bundleEdits: BundleEdits
     /// Inject new dylibs as weak references so a missing file cannot crash the app.
@@ -19,12 +21,12 @@ public struct SigningRequest {
     public init(ipa: URL, profileURL: URL, identitySHA1: String,
                 edits: InfoPlistEdits = .init(), dylibs: [URL] = [],
                 iconImage: URL? = nil, resourceBundles: [URL] = [], frameworks: [URL] = [],
-                bundleEdits: BundleEdits = .init(),
+                extensionProfiles: [String: URL] = [:], bundleEdits: BundleEdits = .init(),
                 injectWeak: Bool = true, outputURL: URL? = nil) {
         self.ipa = ipa; self.profileURL = profileURL; self.identitySHA1 = identitySHA1
         self.edits = edits; self.dylibs = dylibs; self.iconImage = iconImage
         self.resourceBundles = resourceBundles; self.frameworks = frameworks
-        self.bundleEdits = bundleEdits; self.injectWeak = injectWeak; self.outputURL = outputURL
+        self.extensionProfiles = extensionProfiles; self.bundleEdits = bundleEdits; self.injectWeak = injectWeak; self.outputURL = outputURL
     }
 }
 
@@ -166,11 +168,27 @@ public struct SigningPipeline {
         let entURL = pkg.workDir.appendingPathComponent("entitlements.plist")
         try codesigner.writeEntitlements(profile, to: entURL)
 
+        // Extensions with their own profile get it embedded and their own entitlements.
+        var entitlementsByPath: [String: URL] = [:]
+        for (relativePath, profileFile) in request.extensionProfiles {
+            let extensionURL = app.appendingPathComponent(relativePath)
+            guard fm.fileExists(atPath: extensionURL.path) else { continue }
+            progress?(.editingBundle("Embedding profile in \(relativePath)"))
+            try BundleEditor().embedProfile(profileFile, into: relativePath, of: app)
+
+            let extensionProfile = try ProvisioningProfile.parse(data: Data(contentsOf: profileFile))
+            let name = extensionURL.deletingPathExtension().lastPathComponent
+            let extensionEnt = pkg.workDir.appendingPathComponent("entitlements-\(name).plist")
+            try codesigner.writeEntitlements(extensionProfile, to: extensionEnt)
+            entitlementsByPath[extensionURL.standardizedFileURL.path] = extensionEnt
+        }
+
         let components = try IPAPackage.signableComponents(appURL: app)
         for component in components {
             progress?(.signing(component.lastPathComponent))
             let ext = component.pathExtension
-            let useEnt = (ext == "app" || ext == "appex") ? entURL : nil
+            let useEnt = entitlementsByPath[component.standardizedFileURL.path]
+                ?? ((ext == "app" || ext == "appex") ? entURL : nil)
             try codesigner.sign(component, identitySHA1: request.identitySHA1, entitlements: useEnt)
         }
 

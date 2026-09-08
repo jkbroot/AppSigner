@@ -60,6 +60,25 @@ final class SignerViewModel: ObservableObject {
     /// Jailbreak references the user chose to re-point at @rpath, keyed "binary|path".
     @Published var rewrittenDylibKeys: Set<String> = []
 
+    /// Profiles assigned to individual app extensions: appex path -> profile file.
+    @Published var extensionProfiles: [String: URL] = [:]
+    /// The app-id each assigned profile covers, for the pre-flight checks.
+    @Published private(set) var extensionProfileAppIDs: [String: String] = [:]
+
+    func assignExtensionProfile(_ url: URL, to appexPath: String) {
+        guard let profile = try? ProvisioningProfile.parse(data: Data(contentsOf: url)) else {
+            errorMessage = "Could not read \(url.lastPathComponent)"
+            return
+        }
+        extensionProfiles[appexPath] = url
+        extensionProfileAppIDs[appexPath] = profile.applicationIdentifier
+    }
+
+    func clearExtensionProfile(_ appexPath: String) {
+        extensionProfiles.removeValue(forKey: appexPath)
+        extensionProfileAppIDs.removeValue(forKey: appexPath)
+    }
+
     // Batch queue (extra apps signed with the same settings)
     @Published var batchQueue: [URL] = []
     var allIPAs: [URL] { ([ipaURL].compactMap { $0 }) + batchQueue }
@@ -190,6 +209,7 @@ final class SignerViewModel: ObservableObject {
             originalEntitlements: originalEntitlements)
         input.tweakTargetBundleIDs = Array(Set(tweaks.flatMap(\.targetBundleIDs))).sorted()
         input.tweakRequiresSubstrate = tweaks.contains { $0.requiresSubstrate }
+        input.extensionProfileAppIDs = extensionProfileAppIDs
         return PreflightValidator().validate(input)
     }
     var errorCount: Int { findings.filter { $0.severity == .error }.count }
@@ -279,6 +299,7 @@ final class SignerViewModel: ObservableObject {
     func clearContentsSelection() {
         removedItems.removeAll(); removedDylibKeys.removeAll(); weakenedDylibKeys.removeAll()
         rewrittenDylibKeys.removeAll()
+        extensionProfiles.removeAll(); extensionProfileAppIDs.removeAll()
     }
 
     // Identity / profile
@@ -691,6 +712,7 @@ final class SignerViewModel: ObservableObject {
                                      identitySHA1: sha1, edits: currentEdits(),
                                      dylibs: dylibs, iconImage: iconURL,
                                      resourceBundles: resourceBundles, frameworks: allFrameworks,
+                                     extensionProfiles: extensionProfiles,
                                      bundleEdits: bundleEdits, injectWeak: injectWeak,
                                      outputURL: nil)
         let shouldInstall = installAfterSign && deviceToolsAvailable

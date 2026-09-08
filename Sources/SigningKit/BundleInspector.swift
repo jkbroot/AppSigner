@@ -39,6 +39,14 @@ public struct BundleItem: Identifiable, Equatable {
     public let sizeBytes: Int64
     public let isProtected: Bool
     public let warning: String?
+    /// For nested bundles (app extensions, watch apps, app clips): their own identifier.
+    public let bundleID: String?
+
+    public init(id: String, name: String, kind: Kind, sizeBytes: Int64,
+                isProtected: Bool, warning: String?, bundleID: String? = nil) {
+        self.id = id; self.name = name; self.kind = kind; self.sizeBytes = sizeBytes
+        self.isProtected = isProtected; self.warning = warning; self.bundleID = bundleID
+    }
 }
 
 public struct BundleReport {
@@ -118,7 +126,8 @@ public struct BundleInspector {
                                     kind: kind(forItem: rel, name: name),
                                     sizeBytes: size(of: url),
                                     isProtected: isProtected,
-                                    warning: warning(forName: name)))
+                                    warning: warning(forName: name),
+                                    bundleID: nestedBundleID(at: url)))
         }
 
         for entry in (try? fm.contentsOfDirectory(at: appURL, includingPropertiesForKeys: nil)) ?? [] {
@@ -169,6 +178,16 @@ public struct BundleInspector {
         if name == "Assets.car" { return .assetCatalog }
         if name == "SC_Info" { return .fairplayLeftover }
         return .other
+    }
+
+    /// Reads `CFBundleIdentifier` from a nested bundle (.appex, .app inside Watch, …).
+    private func nestedBundleID(at url: URL) -> String? {
+        let ext = url.pathExtension
+        guard ext == "appex" || ext == "app" else { return nil }
+        guard let data = try? Data(contentsOf: url.appendingPathComponent("Info.plist")),
+              let dict = try? PropertyListSerialization.propertyList(from: data, format: nil)
+                as? [String: Any] else { return nil }
+        return dict["CFBundleIdentifier"] as? String
     }
 
     private func warning(forName name: String) -> String? {

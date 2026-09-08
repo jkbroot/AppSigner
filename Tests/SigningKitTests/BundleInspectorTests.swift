@@ -159,3 +159,20 @@ extension BundleInspectorTests {
         XCTAssertEqual(roles["Extensions/Legacy.appex/Legacy"], .appExtension)
     }
 }
+
+extension BundleInspectorTests {
+    func testReportsBundleIDsForNestedBundles() throws {
+        let app = try makeApp()
+        // Give the extension its own identifier, as a real appex has.
+        try PropertyListSerialization.data(
+            fromPropertyList: ["CFBundleIdentifier": "com.demo.app.share", "CFBundleExecutable": "Ext"],
+            format: .xml, options: 0)
+            .write(to: app.appendingPathComponent("PlugIns/Ext.appex/Info.plist"))
+
+        let report = try BundleInspector().inspect(appURL: app)
+        let ext = try XCTUnwrap(report.items.first { $0.name == "Ext.appex" })
+        XCTAssertEqual(ext.bundleID, "com.demo.app.share")
+        XCTAssertNil(report.items.first { $0.name == "Assets.car" }?.bundleID,
+                     "plain files have no bundle id")
+    }
+}

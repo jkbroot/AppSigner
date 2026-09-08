@@ -1,4 +1,6 @@
 import SwiftUI
+import AppKit
+import UniformTypeIdentifiers
 import SigningKit
 
 /// The IPA explorer: shows every dylib reference and every removable bundle entry,
@@ -166,6 +168,22 @@ struct ContentsView: View {
                 }
             }
             Spacer()
+            if item.kind == .appExtension {
+                if let assigned = model.extensionProfiles[item.id] {
+                    Button {
+                        model.clearExtensionProfile(item.id)
+                    } label: {
+                        Label(assigned.deletingPathExtension().lastPathComponent,
+                              systemImage: "checkmark.seal.fill")
+                    }
+                    .controlSize(.small).tint(.green)
+                    .help("Remove this extension's profile")
+                } else {
+                    Button("Profile…") { assignProfile(to: item.id) }
+                        .controlSize(.small)
+                        .help("Give this extension its own provisioning profile")
+                }
+            }
             Text(byteText(item.sizeBytes)).font(.caption).foregroundStyle(.secondary)
         }
         .padding(.vertical, 5).padding(.horizontal, 8)
@@ -215,6 +233,16 @@ struct ContentsView: View {
         case .missing: return .red
         case .jailbreak: return .purple
         case .system: return .secondary
+        }
+    }
+
+    private func assignProfile(to appexPath: String) {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [UTType(filenameExtension: "mobileprovision") ?? .data]
+        panel.allowsMultipleSelection = false
+        panel.message = "Choose the provisioning profile for this app extension"
+        if panel.runModal() == .OK, let url = panel.url {
+            model.assignExtensionProfile(url, to: appexPath)
         }
     }
 

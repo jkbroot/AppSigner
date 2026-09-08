@@ -25,9 +25,9 @@ Each type has a single responsibility and is testable in isolation.
 | `InfoPlistEditor` | Reads and edits `Info.plist`, preserving the on-disk format: the basics (bundle id, version, build, name) plus minimum iOS version, device families, file sharing, ATS arbitrary loads, removing required capabilities, URL-scheme prefixing, and a raw typed key editor (`PlistValue`). Refuses to touch protected keys. |
 | `MachOFile` | Generic Mach-O reader: walks thin/fat files and 32/64-bit slices, reporting architectures, FairPlay state and every dylib reference (load / weak / reexport / upward). Also maps a jailbreak install path to its `@rpath` form. |
 | `MachOInjector` | Injects, **removes**, **re-points** and re-flags dylib load commands natively. A rewrite is written into the existing command when the new path fits, otherwise the command is removed and re-injected, keeping the weak flag either way. Injection writes into the header padding; removal compacts the commands and re-zeroes the freed tail, so file size and section offsets never change. |
-| `BundleInspector` | Scans any `.app`: finds every Mach-O, classifies each dylib reference (system / bundled / jailbreak / missing) resolving `@rpath`, `@executable_path` and `@loader_path`, builds a referrer graph, and lists removable vs protected entries with sizes. |
+| `BundleInspector` | Scans any `.app`: finds every Mach-O, classifies each dylib reference (system / bundled / jailbreak / missing) resolving `@rpath`, `@executable_path` and `@loader_path`, builds a referrer graph, reports each nested bundle's own identifier, and lists removable vs protected entries with sizes. |
 | `DebPackage` | Reads a Cydia/Sileo `.deb`: unpacks the `ar` container and payload with system `tar` (gzip/xz/bzip2/zstd auto-detected), parses the control metadata, and finds tweak dylibs, resource bundles, frameworks, and the target bundle ids from each tweak's filter plist. |
-| `BundleEditor` | Applies removals, path rewrites and dylib edits to an unpacked bundle, and installs resource bundles and frameworks. Validates up front and refuses protected paths or paths escaping the bundle. |
+| `BundleEditor` | Applies removals, path rewrites and dylib edits to an unpacked bundle, installs resource bundles and frameworks, and embeds a provisioning profile inside a nested bundle. Validates up front and refuses protected paths or paths escaping the bundle. |
 | `PreflightValidator` | Pure, app-agnostic checks run before signing; findings are advisory and never block a run. |
 | `IconInstaller` | Renders the standard iOS icon PNG sizes with CoreGraphics/ImageIO and wires them into `Info.plist`, overriding an `Assets.car` icon by loose PNGs. |
 | `Codesigner` | Builds an entitlements plist from the profile and runs `codesign` per component, then verifies. |
@@ -55,7 +55,8 @@ Each type has a single responsibility and is testable in isolation.
    `Frameworks/`, patch the main executable's load commands), weak-linked by default.
 7. Replace the icon (before signing, so the icons are sealed by the signature).
 8. Extract entitlements from the profile.
-9. `codesign` every component from the inside out — nested frameworks and dylibs, then app
+9. Embed any per-extension profiles and write their own entitlements, then `codesign`
+   every component from the inside out — nested frameworks and dylibs, then app
    extensions, then the `.app` — applying entitlements only to the app and its extensions.
 10. Verify with `codesign --verify --deep --strict`.
 11. Repack into `<input-basename>_Signed.ipa` (unique).

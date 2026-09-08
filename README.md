@@ -43,6 +43,11 @@ install — the standard [libimobiledevice](https://libimobiledevice.org) suite.
   resource bundles and **frameworks** in both the classic and **rootless** (`/var/jb`)
   layouts, injects the libraries, copies the bundles and frameworks into the app, and
   reads the package's filter to tell you which app the tweak actually targets.
+- **A profile per app extension** — an extension has its own bundle id, so a non-wildcard
+  app profile cannot cover it. Give each `.appex` its own profile and AppSigner embeds it
+  inside that extension and signs it with entitlements derived from it, while the app keeps
+  its own. Pre-flight stops warning once every extension is covered — and flags a profile
+  assigned to the wrong one.
 - **Repoint jailbreak paths** — a tweak that links against `/Library/MobileSubstrate/…`
   or `/var/jb/…` cannot load on a normal device. AppSigner spots those references and
   re-points them at `@rpath` in one click, keeping the weak flag, so the library resolves
@@ -57,7 +62,8 @@ install — the standard [libimobiledevice](https://libimobiledevice.org) suite.
 - **Pre-flight checks** — before you sign, it flags FairPlay-encrypted binaries, expired
   or soon-to-expire profiles, an identity the profile does not authorize, a bundle id
   that a non-wildcard profile will not cover, extensions that need their own profiles,
-  a connected device that is not provisioned, missing libraries, jailbreak-only paths,
+  a connected device that is not provisioned, extensions left without their own profile,
+  missing libraries, jailbreak-only paths,
   a missing arm64 slice, entitlements your profile will drop, a tweak that targets a
   different app, and a tweak that needs Substrate the app does not bundle.
 - **Icon replacement** — generates the standard iOS icon sizes and overrides the app

@@ -170,3 +170,26 @@ extension BundleEditorTests {
         XCTAssertEqual(text, "v2")
     }
 }
+
+extension BundleEditorTests {
+    func testEmbedsAProfileInsideAnExtension() throws {
+        let app = try makeApp()
+        let profile = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("p-\(UUID().uuidString).mobileprovision")
+        try Data("PROFILE".utf8).write(to: profile)
+        // A stale profile that must be replaced.
+        try Data("OLD".utf8).write(to: app.appendingPathComponent("PlugIns/Ext.appex/embedded.mobileprovision"))
+
+        try BundleEditor().embedProfile(profile, into: "PlugIns/Ext.appex", of: app)
+
+        let embedded = app.appendingPathComponent("PlugIns/Ext.appex/embedded.mobileprovision")
+        XCTAssertEqual(try String(contentsOf: embedded, encoding: .utf8), "PROFILE")
+    }
+
+    func testEmbeddingRefusesAPathOutsideTheBundle() throws {
+        let app = try makeApp()
+        let profile = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("x.mobileprovision")
+        try Data("P".utf8).write(to: profile)
+        XCTAssertThrowsError(try BundleEditor().embedProfile(profile, into: "../evil", of: app))
+    }
+}

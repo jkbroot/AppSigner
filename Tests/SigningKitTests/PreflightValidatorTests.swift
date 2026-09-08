@@ -165,3 +165,51 @@ extension PreflightValidatorTests {
             .map(\.id).contains("substrateMissing"))
     }
 }
+
+extension PreflightValidatorTests {
+    private func appex(_ id: String, path: String = "PlugIns/E.appex") -> BundleItem {
+        BundleItem(id: path, name: (path as NSString).lastPathComponent, kind: .appExtension,
+                   sizeBytes: 1, isProtected: false, warning: nil, bundleID: id)
+    }
+
+    private func explicitProfileInput(items: [BundleItem],
+                                      covered: [String: String] = [:]) -> PreflightInput {
+        var i = PreflightInput(report: report(items: items),
+                               profile: profile(appID: "TEAM123456.com.x.app"),
+                               identitySHA1: "AAAA", bundleID: "com.x.app")
+        i.extensionProfileAppIDs = covered
+        return i
+    }
+
+    func testNoExtensionWarningOnceEveryExtensionHasItsOwnProfile() {
+        let ids = PreflightValidator().validate(explicitProfileInput(
+            items: [appex("com.x.app.share")],
+            covered: ["PlugIns/E.appex": "TEAM123456.com.x.app.share"])).map(\.id)
+        XCTAssertFalse(ids.contains("extensionsNeedOwnProfiles"))
+    }
+
+    func testStillWarnsForExtensionsLeftWithoutAProfile() {
+        let ids = PreflightValidator().validate(explicitProfileInput(
+            items: [appex("com.x.app.share", path: "PlugIns/A.appex"),
+                    appex("com.x.app.widget", path: "PlugIns/B.appex")],
+            covered: ["PlugIns/A.appex": "TEAM123456.com.x.app.share"])).map(\.id)
+        XCTAssertTrue(ids.contains("extensionsNeedOwnProfiles"), "one is still uncovered")
+    }
+
+    func testFlagsAProfileAssignedToTheWrongExtension() {
+        let findings = PreflightValidator().validate(explicitProfileInput(
+            items: [appex("com.x.app.share")],
+            covered: ["PlugIns/E.appex": "TEAM123456.com.other.thing"]))
+        let mismatch = findings.first { $0.id == "extensionProfileMismatch" }
+        XCTAssertNotNil(mismatch)
+        XCTAssertTrue(mismatch?.detail.contains("com.x.app.share") == true)
+    }
+
+    func testWildcardExtensionProfileCoversAnyExtension() {
+        let ids = PreflightValidator().validate(explicitProfileInput(
+            items: [appex("com.x.app.share")],
+            covered: ["PlugIns/E.appex": "TEAM123456.*"])).map(\.id)
+        XCTAssertFalse(ids.contains("extensionProfileMismatch"))
+        XCTAssertFalse(ids.contains("extensionsNeedOwnProfiles"))
+    }
+}
