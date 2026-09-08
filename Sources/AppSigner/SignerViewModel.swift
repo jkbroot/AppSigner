@@ -46,6 +46,63 @@ final class SignerViewModel: ObservableObject {
     @Published var tweaks: [LoadedTweak] = []
     var resourceBundles: [URL] { tweaks.flatMap(\.bundles) }
 
+    // Batch queue (extra apps signed with the same settings)
+    @Published var batchQueue: [URL] = []
+    var allIPAs: [URL] { ([ipaURL].compactMap { $0 }) + batchQueue }
+    var isBatch: Bool { !batchQueue.isEmpty }
+
+    // Presets
+    @Published var presets: [SigningPreset] = []
+    private let presetStore = PresetStore()
+
+    func loadPresets() { presets = presetStore.load() }
+
+    func applyPreset(_ preset: SigningPreset) {
+        if let path = preset.profilePath {
+            let url = URL(fileURLWithPath: path)
+            if FileManager.default.fileExists(atPath: path) { setProfile(url) }
+            else { errorMessage = "Profile from preset is missing: \(url.lastPathComponent)" }
+        }
+        if let sha1 = preset.identitySHA1 { selectedIdentitySHA1 = sha1 }
+        dylibs = preset.dylibPaths.map(URL.init(fileURLWithPath:))
+            .filter { FileManager.default.fileExists(atPath: $0.path) }
+        iconURL = preset.iconPath.map(URL.init(fileURLWithPath:))
+            .flatMap { FileManager.default.fileExists(atPath: $0.path) ? $0 : nil }
+        injectWeak = preset.injectWeak
+        minimumOSVersion = preset.minimumOSVersion ?? minimumOSVersion
+        if let families = preset.deviceFamilies { deviceFamilies = families }
+        if let v = preset.fileSharingEnabled { fileSharingEnabled = v }
+        if let v = preset.allowArbitraryLoads { allowArbitraryLoads = v }
+        removeRequiredCapabilities = preset.removeRequiredCapabilities
+        urlSchemePrefix = preset.urlSchemePrefix ?? ""
+        removedPlistKeys = Set(preset.removedPlistKeys)
+        customPlistValues = preset.customPlistValues
+    }
+
+    func saveCurrentAsPreset(named name: String) {
+        var preset = SigningPreset(name: name)
+        preset.profilePath = profileURL?.path
+        preset.identitySHA1 = selectedIdentitySHA1
+        preset.dylibPaths = dylibs.map(\.path)
+        preset.iconPath = iconURL?.path
+        preset.injectWeak = injectWeak
+        preset.minimumOSVersion = minimumOSVersion.isEmpty ? nil : minimumOSVersion
+        preset.deviceFamilies = deviceFamilies.isEmpty ? nil : deviceFamilies
+        preset.fileSharingEnabled = fileSharingEnabled
+        preset.allowArbitraryLoads = allowArbitraryLoads
+        preset.removeRequiredCapabilities = removeRequiredCapabilities
+        preset.urlSchemePrefix = urlSchemePrefix.isEmpty ? nil : urlSchemePrefix
+        preset.removedPlistKeys = Array(removedPlistKeys)
+        preset.customPlistValues = customPlistValues
+        do { presets = try presetStore.add(preset) }
+        catch { errorMessage = "Could not save preset: \(error.localizedDescription)" }
+    }
+
+    func deletePreset(_ preset: SigningPreset) {
+        do { presets = try presetStore.delete(id: preset.id) }
+        catch { errorMessage = "Could not delete preset: \(error.localizedDescription)" }
+    }
+
     // Advanced Info.plist editing
     @Published var showPlistEditor = false
     @Published var appPlist: [String: Any] = [:]
@@ -264,7 +321,7 @@ final class SignerViewModel: ObservableObject {
 
     // MARK: Inputs
 
-    func onAppear() { refreshIdentities(); refreshDevices() }
+    func onAppear() { refreshIdentities(); refreshDevices(); loadPresets() }
 
     func refreshDevices() {
         DispatchQueue.global(qos: .userInitiated).async {
@@ -473,7 +530,9 @@ final class SignerViewModel: ObservableObject {
 
     func acceptFile(_ url: URL) {
         switch url.pathExtension.lowercased() {
-        case "ipa": setIPA(url)
+        case "ipa":
+            if ipaURL == nil { setIPA(url) }
+            else if !batchQueue.contains(url) && url != ipaURL { batchQueue.append(url) }
         case "mobileprovision": setProfile(url)
         case "dylib": addDylib(url)
         case "deb": loadTweakPackage(url)
@@ -514,6 +573,8 @@ final class SignerViewModel: ObservableObject {
             }
         }
     }
+
+    func removeFromQueue(_ url: URL) { batchQueue.removeAll { $0 == url } }
 
     func removeTweak(_ tweak: LoadedTweak) {
         dylibs.removeAll { url in tweak.dylibs.contains(url) }
@@ -598,6 +659,7 @@ final class SignerViewModel: ObservableObject {
     // MARK: Signing + process screen
 
     func sign() {
+        if isBatch { signBatch(); return }
         guard let ipaURL, let profileURL, let sha1 = selectedIdentitySHA1 else { return }
         steps = []; log = []; signCount = 0
         resultURL = nil; errorMessage = nil
@@ -638,6 +700,70 @@ final class SignerViewModel: ObservableObject {
                 DispatchQueue.main.async { self.isRunning = false }
             } catch {
                 DispatchQueue.main.async { self.finishFailure(error) }
+            }
+        }
+    }
+
+    /// Signs every queued app with the shared settings. Per-app metadata (bundle id,
+    /// name, version) is deliberately skipped — reusing it would collide across apps.
+    private func signBatch() {
+        guard let profileURL, let sha1 = selectedIdentitySHA1 else { return }
+        let apps = allIPAs
+        steps = apps.map { ProcessStep(title: $0.lastPathComponent, status: .pending) }
+        log = []; resultURL = nil; errorMessage = nil
+        isRunning = true; showProcess = true
+
+        var shared = InfoPlistEdits()
+        if minimumOSVersion != originalMinimumOS, !minimumOSVersion.isEmpty {
+            shared.minimumOSVersion = minimumOSVersion
+        }
+        if deviceFamilies != originalDeviceFamilies, !deviceFamilies.isEmpty {
+            shared.deviceFamilies = deviceFamilies
+        }
+        if fileSharingEnabled != originalFileSharing { shared.fileSharingEnabled = fileSharingEnabled }
+        if allowArbitraryLoads != originalArbitraryLoads { shared.allowArbitraryLoads = allowArbitraryLoads }
+        shared.removeRequiredCapabilities = removeRequiredCapabilities
+        if !urlSchemePrefix.isEmpty { shared.urlSchemePrefix = urlSchemePrefix }
+        shared.removedKeys = Array(removedPlistKeys)
+        shared.customValues = customPlistValues
+
+        let requests = apps.map { ipa in
+            SigningRequest(ipa: ipa, profileURL: profileURL, identitySHA1: sha1,
+                           edits: shared, dylibs: dylibs, iconImage: iconURL,
+                           resourceBundles: resourceBundles, injectWeak: injectWeak)
+        }
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            let results = BatchSigner().run(
+                requests,
+                progress: { index, _, event in
+                    DispatchQueue.main.async {
+                        guard self.steps.indices.contains(index) else { return }
+                        self.steps[index].status = .active
+                        self.steps[index].detail = event.description
+                    }
+                },
+                itemFinished: { index, result in
+                    DispatchQueue.main.async {
+                        guard self.steps.indices.contains(index) else { return }
+                        if result.succeeded {
+                            self.steps[index].status = .done
+                            self.steps[index].detail = result.output?.lastPathComponent ?? ""
+                            self.log.append("✅ \(result.ipa.lastPathComponent)")
+                        } else {
+                            self.steps[index].status = .failed
+                            self.steps[index].detail = result.errorMessage ?? "failed"
+                            self.log.append("❌ \(result.ipa.lastPathComponent): \(result.errorMessage ?? "")")
+                        }
+                    }
+                })
+            DispatchQueue.main.async {
+                let ok = results.filter(\.succeeded).count
+                let failed = results.count - ok
+                self.log.append("Finished: \(ok) signed" + (failed > 0 ? " · \(failed) failed" : ""))
+                self.resultURL = results.first(where: \.succeeded)?.output
+                if failed > 0 { self.errorMessage = "\(failed) of \(results.count) app(s) failed." }
+                self.isRunning = false
             }
         }
     }

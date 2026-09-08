@@ -1,7 +1,7 @@
 import Foundation
 
 /// A typed value for the raw (advanced) key editor.
-public enum PlistValue: Equatable {
+public enum PlistValue: Equatable, Codable {
     case string(String)
     case bool(Bool)
     case integer(Int)
@@ -13,6 +13,32 @@ public enum PlistValue: Equatable {
         case .bool(let v): return v
         case .integer(let v): return v
         case .stringArray(let v): return v
+        }
+    }
+
+    // Tagged encoding so presets round-trip every case exactly.
+    private enum CodingKeys: String, CodingKey { case type, value }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case .string(let v):      try c.encode("string", forKey: .type); try c.encode(v, forKey: .value)
+        case .bool(let v):        try c.encode("bool", forKey: .type);   try c.encode(v, forKey: .value)
+        case .integer(let v):     try c.encode("integer", forKey: .type); try c.encode(v, forKey: .value)
+        case .stringArray(let v): try c.encode("list", forKey: .type);   try c.encode(v, forKey: .value)
+        }
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        switch try c.decode(String.self, forKey: .type) {
+        case "string":  self = .string(try c.decode(String.self, forKey: .value))
+        case "bool":    self = .bool(try c.decode(Bool.self, forKey: .value))
+        case "integer": self = .integer(try c.decode(Int.self, forKey: .value))
+        case "list":    self = .stringArray(try c.decode([String].self, forKey: .value))
+        case let other:
+            throw DecodingError.dataCorruptedError(forKey: .type, in: c,
+                                                   debugDescription: "unknown value type '\(other)'")
         }
     }
 }

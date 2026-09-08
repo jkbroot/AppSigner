@@ -62,6 +62,12 @@ install — the standard [libimobiledevice](https://libimobiledevice.org) suite.
   `UIRequiredDeviceCapabilities` to widen device support, and **prefix the app's URL
   schemes** so a second copy does not clash — plus a raw key editor with typed values
   (text / yes-no / number / list). `CFBundleExecutable` is protected and cannot be broken.
+- **Batch signing** — drop several `.ipa` files and sign them all with the same settings.
+  A failure is reported and the run continues, ending with a summary. Per-app metadata
+  (bundle id, name, version) is skipped in batch mode so apps cannot collide.
+- **Presets** — save a configuration (profile, identity, dylibs, icon, weak injection and
+  the advanced `Info.plist` options) and reapply it in one click. App-specific fields are
+  never stored, so a preset is safe to reuse across apps.
 - **On-device install** — install the signed IPA over USB via `ideviceinstaller`.
 - **External-tools manager** — detect, install and update the optional tools (Homebrew
   formulae, plus a GitHub-releases link for the legacy `optool`).
@@ -94,7 +100,7 @@ You can also open `Package.swift` in Xcode and run the `AppSigner` target.
 
 1. **Drop your files** onto the single drop zone — the app sorts them by type
    automatically:
-   - `.ipa` → the app to sign
+   - `.ipa` → the app to sign (drop several to queue a batch)
    - `.mobileprovision` → the provisioning profile
    - `.dylib` → libraries to inject
    - `.deb` → a tweak package (its libraries and resource bundles are added for you)

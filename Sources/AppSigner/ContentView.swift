@@ -5,6 +5,8 @@ import SigningKit
 
 struct ContentView: View {
     @EnvironmentObject var model: SignerViewModel
+    @State private var showSavePreset = false
+    @State private var presetName = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -12,6 +14,7 @@ struct ContentView: View {
             UnifiedDropZone { model.acceptFiles($0) }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             selectionRows
+            if model.isBatch { queueSection }
             if model.iconURL != nil { iconRow }
             if !model.tweaks.isEmpty { tweaksSection }
             if !model.dylibs.isEmpty { dylibsSection }
@@ -30,6 +33,13 @@ struct ContentView: View {
         .sheet(isPresented: $model.showContents) { ContentsView() }
         .sheet(isPresented: $model.showPreflight) { PreflightView() }
         .sheet(isPresented: $model.showPlistEditor) { PlistEditorView() }
+        .alert("Save preset", isPresented: $showSavePreset) {
+            TextField("Name", text: $presetName)
+            Button("Save") { if !presetName.isEmpty { model.saveCurrentAsPreset(named: presetName) } }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Stores the profile, identity, dylibs, icon and advanced options — not the bundle id, name or version.")
+        }
     }
 
     // MARK: Header
@@ -42,6 +52,7 @@ struct ContentView: View {
             Text("AppSigner").font(.system(size: 16, weight: .bold))
             Text("Re-sign iOS apps").font(.caption).foregroundStyle(.secondary)
             Spacer()
+            presetMenu
             Button { model.showTools = true } label: { Image(systemName: "wrench.and.screwdriver") }
                 .buttonStyle(.borderless)
                 .help("External tools")
@@ -49,6 +60,30 @@ struct ContentView: View {
                 .buttonStyle(.borderless)
                 .help("Reload Keychain identities")
         }
+    }
+
+    private var presetMenu: some View {
+        Menu {
+            if model.presets.isEmpty {
+                Text("No saved presets")
+            } else {
+                ForEach(model.presets) { preset in
+                    Button(preset.name) { model.applyPreset(preset) }
+                }
+                Divider()
+                Menu("Delete") {
+                    ForEach(model.presets) { preset in
+                        Button(preset.name) { model.deletePreset(preset) }
+                    }
+                }
+                Divider()
+            }
+            Button("Save current settings…") { presetName = ""; showSavePreset = true }
+        } label: {
+            Image(systemName: "square.stack.3d.up")
+        }
+        .menuStyle(.borderlessButton).frame(width: 26)
+        .help("Presets")
     }
 
     // MARK: Selection status rows
@@ -66,6 +101,27 @@ struct ContentView: View {
                       filename: model.profileURL?.lastPathComponent,
                       detail: model.profile != nil ? "\(model.profile?.name ?? "")  ·  \(model.profileSummary)" : nil,
                       onClear: { model.clearProfile() })
+        }
+    }
+
+    // MARK: Batch queue
+
+    private var queueSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            ForEach(model.batchQueue, id: \.self) { url in
+                HStack(spacing: 10) {
+                    Image(systemName: "square.stack").foregroundStyle(.secondary).frame(width: 20)
+                    Text("Queued").font(.subheadline).frame(width: 64, alignment: .leading)
+                    Text(url.lastPathComponent).font(.subheadline).lineLimit(1).truncationMode(.middle)
+                    Spacer()
+                    Button { model.removeFromQueue(url) } label: { Image(systemName: "xmark.circle.fill") }
+                        .buttonStyle(.borderless).foregroundStyle(.secondary).help("Remove")
+                }
+                .padding(.vertical, 7).padding(.horizontal, 10)
+                .background(RoundedRectangle(cornerRadius: 8).fill(Color(nsColor: .controlBackgroundColor)))
+            }
+            Text("Batch: shared settings apply to every app. Bundle ID, name and version are left untouched.")
+                .font(.caption2).foregroundStyle(.secondary).padding(.leading, 30)
         }
     }
 
@@ -295,7 +351,8 @@ struct ContentView: View {
     private var signBar: some View {
         VStack(spacing: 8) {
             Button(action: { model.sign() }) {
-                Label("Sign", systemImage: "signature").frame(maxWidth: .infinity)
+                Label(model.isBatch ? "Sign \(model.allIPAs.count) apps" : "Sign",
+                      systemImage: "signature").frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
