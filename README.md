@@ -40,9 +40,15 @@ install — the standard [libimobiledevice](https://libimobiledevice.org) suite.
   never crash the app. No `optool` or external injector.
 - **Tweak packages (`.deb`)** — drop a Cydia/Sileo package and AppSigner unpacks it using
   nothing but macOS' own `tar`: it reads the control metadata, finds the tweak libraries
-  and resource bundles in both the classic and **rootless** (`/var/jb`) layouts, injects
-  the libraries, copies the bundles into the app, and reads the package's filter to tell
-  you which app the tweak actually targets.
+  resource bundles and **frameworks** in both the classic and **rootless** (`/var/jb`)
+  layouts, injects the libraries, copies the bundles and frameworks into the app, and
+  reads the package's filter to tell you which app the tweak actually targets.
+- **Repoint jailbreak paths** — a tweak that links against `/Library/MobileSubstrate/…`
+  or `/var/jb/…` cannot load on a normal device. AppSigner spots those references and
+  re-points them at `@rpath` in one click, keeping the weak flag, so the library resolves
+  from inside the app instead of crashing it.
+- **Bundle a Substrate shim** — drop a `CydiaSubstrate.framework` (or a `.deb` that ships
+  one, such as ElleKit) and it is installed into `Frameworks/` before signing.
 - **IPA explorer & dylib manager** — scans every Mach-O in the bundle (main app, app
   extensions, frameworks, dylibs, watch app), lists each library reference with its
   state (weak/strong, bundled/missing/jailbreak) and who else uses it, and lets you
@@ -103,7 +109,8 @@ You can also open `Package.swift` in Xcode and run the `AppSigner` target.
    - `.ipa` → the app to sign (drop several to queue a batch)
    - `.mobileprovision` → the provisioning profile
    - `.dylib` → libraries to inject
-   - `.deb` → a tweak package (its libraries and resource bundles are added for you)
+   - `.deb` → a tweak package (its libraries, bundles and frameworks are added for you)
+   - `.framework` → a framework to bundle, e.g. a Substrate shim
    - an image (`.png`/`.jpg`/…) → the replacement icon
 2. AppSigner reads your Keychain and selects the identity that matches the profile.
 3. Optionally edit the **Bundle ID / name / version / build**.
@@ -163,6 +170,10 @@ sample profile and never require any real signing material.
   names *and* the app's existing icon reference names, and by removing `CFBundleIconName`.
   It does **not** recompile the binary `Assets.car` (Apple's tools cannot do that without
   the original asset sources), which is unnecessary for the override to take effect.
+- **Substrate shims are supplied by you.** AppSigner detects that a tweak needs
+  CydiaSubstrate / ElleKit and can bundle a framework you provide, but it never downloads
+  one: ElleKit publishes no GitHub releases, and pulling binaries from third-party
+  jailbreak repositories is not something the app does on your behalf.
 - **`optool` is not used.** Dylib injection is implemented natively. `optool` appears only
   in the tools panel as a convenience for legacy workflows and is never executed.
 

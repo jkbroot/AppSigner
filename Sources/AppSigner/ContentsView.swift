@@ -124,6 +124,16 @@ struct ContentsView: View {
                 }
             }
             Spacer()
+            if dylib.kind == .jailbreak, !removed,
+               let target = MachOFile.suggestedRPath(for: dylib.path) {
+                Button(model.rewrittenDylibKeys.contains(key) ? "Will fix" : "Fix path") {
+                    if model.rewrittenDylibKeys.contains(key) { model.rewrittenDylibKeys.remove(key) }
+                    else { model.rewrittenDylibKeys.insert(key) }
+                }
+                .controlSize(.small)
+                .tint(model.rewrittenDylibKeys.contains(key) ? .green : .orange)
+                .help("Re-point at \(target) so it loads from inside the app")
+            }
             if !dylib.isWeak && !removed {
                 Button("Make weak") {
                     let k = SignerViewModel.dylibKey(binary.id, dylib.path)

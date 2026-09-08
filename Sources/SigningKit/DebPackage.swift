@@ -24,6 +24,8 @@ public enum DebPackage {
         public let dylibs: [URL]
         /// Resource bundles the tweak loads at runtime.
         public let bundles: [URL]
+        /// Frameworks shipped by the package (e.g. a CydiaSubstrate shim).
+        public let frameworks: [URL]
         /// Bundle ids the tweak declares it targets (from its filter plist).
         public let targetBundleIDs: [String]
         /// The package depends on Substrate / ElleKit.
@@ -88,19 +90,26 @@ public enum DebPackage {
                         dependencies: dependencies)
 
         // 4) Payload contents — searched generically so rootful and rootless both work.
-        var dylibs: [URL] = [], bundles: [URL] = []
+        var dylibs: [URL] = [], bundles: [URL] = [], frameworks: [URL] = []
         if let walker = fm.enumerator(at: payload, includingPropertiesForKeys: [.isDirectoryKey]) {
             for case let url as URL in walker {
                 let isDir = (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
-                if !isDir, url.pathExtension == "dylib" { dylibs.append(url) }
+                if isDir, url.pathExtension == "framework" {
+                    frameworks.append(url)
+                    walker.skipDescendants()          // its binary is not a loose dylib
+                    continue
+                }
                 if isDir, url.pathExtension == "bundle" {
                     bundles.append(url)
                     walker.skipDescendants()
+                    continue
                 }
+                if !isDir, url.pathExtension == "dylib" { dylibs.append(url) }
             }
         }
         dylibs.sort { $0.lastPathComponent < $1.lastPathComponent }
         bundles.sort { $0.lastPathComponent < $1.lastPathComponent }
+        frameworks.sort { $0.lastPathComponent < $1.lastPathComponent }
 
         // 5) Target bundle ids from each tweak's filter plist.
         var targets: [String] = []
@@ -119,7 +128,7 @@ public enum DebPackage {
             return Self.substrateDependencies.contains { name.contains($0) }
         }
 
-        return Contents(info: info, dylibs: dylibs, bundles: bundles,
+        return Contents(info: info, dylibs: dylibs, bundles: bundles, frameworks: frameworks,
                         targetBundleIDs: Array(Set(targets)).sorted(),
                         requiresSubstrate: needsSubstrate, root: dir)
     }

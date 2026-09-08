@@ -120,3 +120,53 @@ extension BundleEditorTests {
         XCTAssertEqual(text, "v2", "an existing bundle of the same name is replaced")
     }
 }
+
+// MARK: - Path rewriting and framework installation
+
+extension BundleEditorTests {
+    func testRewritesJailbreakPathsToRPath() throws {
+        let app = try makeApp()
+        let main = app.appendingPathComponent("Demo")
+        try MachOInjector.inject(dylibPath: "/Library/Frameworks/CydiaSubstrate.framework/CydiaSubstrate",
+                                 into: main, weak: true)
+
+        var edits = BundleEdits()
+        edits.rewrittenDylibs = [DylibPathRewrite(
+            binaryPath: "Demo",
+            from: "/Library/Frameworks/CydiaSubstrate.framework/CydiaSubstrate",
+            to: "@rpath/CydiaSubstrate.framework/CydiaSubstrate")]
+        try BundleEditor().apply(edits, to: app)
+
+        let refs = try MachOFile.read(url: main).dylibs
+        XCTAssertTrue(refs.contains { $0.path == "@rpath/CydiaSubstrate.framework/CydiaSubstrate" })
+        XCTAssertFalse(refs.contains { $0.path.hasPrefix("/Library/") })
+    }
+
+    func testInstallsFrameworksIntoTheFrameworksFolder() throws {
+        let app = try makeApp()
+        let src = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("fw-\(UUID().uuidString)/CydiaSubstrate.framework")
+        try fm.createDirectory(at: src, withIntermediateDirectories: true)
+        try Data("FW".utf8).write(to: src.appendingPathComponent("CydiaSubstrate"))
+
+        try BundleEditor().installFrameworks([src], into: app)
+
+        let installed = app.appendingPathComponent("Frameworks/CydiaSubstrate.framework/CydiaSubstrate")
+        XCTAssertTrue(fm.fileExists(atPath: installed.path), "frameworks go under Frameworks/")
+    }
+
+    func testReinstallingAFrameworkReplacesIt() throws {
+        let app = try makeApp()
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("fw-\(UUID().uuidString)")
+        let src = dir.appendingPathComponent("Shim.framework")
+        try fm.createDirectory(at: src, withIntermediateDirectories: true)
+        try Data("v1".utf8).write(to: src.appendingPathComponent("Shim"))
+        try BundleEditor().installFrameworks([src], into: app)
+        try Data("v2".utf8).write(to: src.appendingPathComponent("Shim"))
+        try BundleEditor().installFrameworks([src], into: app)
+
+        let text = try String(contentsOf: app.appendingPathComponent("Frameworks/Shim.framework/Shim"),
+                              encoding: .utf8)
+        XCTAssertEqual(text, "v2")
+    }
+}

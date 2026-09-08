@@ -7,6 +7,7 @@ struct LoadedTweak: Identifiable {
     let info: DebPackage.Info
     let dylibs: [URL]
     let bundles: [URL]
+    let frameworks: [URL]
     let targetBundleIDs: [String]
     let requiresSubstrate: Bool
     /// Temporary extraction directory, removed when the tweak is dropped.
@@ -45,6 +46,19 @@ final class SignerViewModel: ObservableObject {
     // Tweak packages (.deb)
     @Published var tweaks: [LoadedTweak] = []
     var resourceBundles: [URL] { tweaks.flatMap(\.bundles) }
+
+    /// Frameworks to bundle: those shipped in a .deb plus any the user added directly.
+    @Published var extraFrameworks: [URL] = []
+    var allFrameworks: [URL] { tweaks.flatMap(\.frameworks) + extraFrameworks }
+    func addFramework(_ url: URL) {
+        guard !allFrameworks.contains(where: { $0.lastPathComponent == url.lastPathComponent })
+        else { return }
+        extraFrameworks.append(url)
+    }
+    func removeFramework(_ url: URL) { extraFrameworks.removeAll { $0 == url } }
+
+    /// Jailbreak references the user chose to re-point at @rpath, keyed "binary|path".
+    @Published var rewrittenDylibKeys: Set<String> = []
 
     // Batch queue (extra apps signed with the same settings)
     @Published var batchQueue: [URL] = []
@@ -225,6 +239,11 @@ final class SignerViewModel: ObservableObject {
         var edits = BundleEdits()
         edits.removedDylibs = removedDylibKeys.compactMap(Self.splitKey)
         edits.weakenedDylibs = weakenedDylibKeys.compactMap(Self.splitKey)
+        edits.rewrittenDylibs = rewrittenDylibKeys.compactMap { key in
+            guard let edit = Self.splitKey(key),
+                  let target = MachOFile.suggestedRPath(for: edit.dylibPath) else { return nil }
+            return DylibPathRewrite(binaryPath: edit.binaryPath, from: edit.dylibPath, to: target)
+        }
 
         var paths = removedItems
         if let report {
@@ -259,6 +278,7 @@ final class SignerViewModel: ObservableObject {
 
     func clearContentsSelection() {
         removedItems.removeAll(); removedDylibKeys.removeAll(); weakenedDylibKeys.removeAll()
+        rewrittenDylibKeys.removeAll()
     }
 
     // Identity / profile
@@ -536,6 +556,7 @@ final class SignerViewModel: ObservableObject {
         case "mobileprovision": setProfile(url)
         case "dylib": addDylib(url)
         case "deb": loadTweakPackage(url)
+        case "framework": addFramework(url)
         case "png", "jpg", "jpeg", "heic": iconURL = url
         default: errorMessage = "Unsupported file: \(url.lastPathComponent) (need .ipa, .mobileprovision, .dylib, .deb or an image)"
         }
@@ -558,6 +579,7 @@ final class SignerViewModel: ObservableObject {
                 let contents = try DebPackage.extract(deb: url, to: dir)
                 let tweak = LoadedTweak(info: contents.info, dylibs: contents.dylibs,
                                         bundles: contents.bundles,
+                                        frameworks: contents.frameworks,
                                         targetBundleIDs: contents.targetBundleIDs,
                                         requiresSubstrate: contents.requiresSubstrate,
                                         root: dir)
@@ -668,7 +690,7 @@ final class SignerViewModel: ObservableObject {
         let request = SigningRequest(ipa: ipaURL, profileURL: profileURL,
                                      identitySHA1: sha1, edits: currentEdits(),
                                      dylibs: dylibs, iconImage: iconURL,
-                                     resourceBundles: resourceBundles,
+                                     resourceBundles: resourceBundles, frameworks: allFrameworks,
                                      bundleEdits: bundleEdits, injectWeak: injectWeak,
                                      outputURL: nil)
         let shouldInstall = installAfterSign && deviceToolsAvailable
@@ -730,7 +752,8 @@ final class SignerViewModel: ObservableObject {
         let requests = apps.map { ipa in
             SigningRequest(ipa: ipa, profileURL: profileURL, identitySHA1: sha1,
                            edits: shared, dylibs: dylibs, iconImage: iconURL,
-                           resourceBundles: resourceBundles, injectWeak: injectWeak)
+                           resourceBundles: resourceBundles, frameworks: allFrameworks,
+                           injectWeak: injectWeak)
         }
 
         DispatchQueue.global(qos: .userInitiated).async {

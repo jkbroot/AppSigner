@@ -11,6 +11,16 @@ public struct DylibEdit: Equatable {
     }
 }
 
+/// Re-points one dylib reference at a new path (e.g. a jailbreak path to `@rpath`).
+public struct DylibPathRewrite: Equatable {
+    public let binaryPath: String
+    public let from: String
+    public let to: String
+    public init(binaryPath: String, from: String, to: String) {
+        self.binaryPath = binaryPath; self.from = from; self.to = to
+    }
+}
+
 /// The set of changes to apply to an unpacked `.app` before signing.
 public struct BundleEdits: Equatable {
     /// Bundle-relative files or directories to delete.
@@ -19,10 +29,13 @@ public struct BundleEdits: Equatable {
     public var removedDylibs: [DylibEdit] = []
     /// References to convert to `LC_LOAD_WEAK_DYLIB`.
     public var weakenedDylibs: [DylibEdit] = []
+    /// References to re-point at a different path.
+    public var rewrittenDylibs: [DylibPathRewrite] = []
 
     public init() {}
     public var isEmpty: Bool {
         removedPaths.isEmpty && removedDylibs.isEmpty && weakenedDylibs.isEmpty
+            && rewrittenDylibs.isEmpty
     }
 }
 
@@ -72,6 +85,11 @@ public struct BundleEditor {
             progress?("Weakening \(edit.dylibPath) in \(edit.binaryPath)")
             try MachOInjector.setWeak(true, forDylib: edit.dylibPath, in: binary)
         }
+        for rewrite in edits.rewrittenDylibs {
+            let binary = try resolveBinary(rewrite.binaryPath, in: appURL)
+            progress?("Repointing \(rewrite.from) to \(rewrite.to)")
+            try MachOInjector.rewriteDylibPath(from: rewrite.from, to: rewrite.to, in: binary)
+        }
         for edit in edits.removedDylibs {
             let binary = try resolveBinary(edit.binaryPath, in: appURL)
             progress?("Removing \(edit.dylibPath) from \(edit.binaryPath)")
@@ -96,6 +114,21 @@ public struct BundleEditor {
             progress?("Adding \(bundle.lastPathComponent)")
             try? FileManager.default.removeItem(at: destination)
             try FileManager.default.copyItem(at: bundle, to: destination)
+        }
+    }
+
+    /// Copies frameworks (a Substrate shim, say) into the app's `Frameworks/` folder,
+    /// replacing any framework of the same name.
+    public func installFrameworks(_ frameworks: [URL], into appURL: URL,
+                                  progress: ((String) -> Void)? = nil) throws {
+        guard !frameworks.isEmpty else { return }
+        let destinationDir = appURL.appendingPathComponent("Frameworks")
+        try FileManager.default.createDirectory(at: destinationDir, withIntermediateDirectories: true)
+        for framework in frameworks {
+            let destination = destinationDir.appendingPathComponent(framework.lastPathComponent)
+            progress?("Adding \(framework.lastPathComponent)")
+            try? FileManager.default.removeItem(at: destination)
+            try FileManager.default.copyItem(at: framework, to: destination)
         }
     }
 

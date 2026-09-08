@@ -124,6 +124,51 @@ public enum MachOInjector {
         try MachO.writeU32(&data, slice.offset + 20, sizeofcmds - UInt32(size))
     }
 
+    // MARK: Rewrite a load path
+
+    /// Points an existing reference at a new path, keeping its weak flag.
+    ///
+    /// The new path is written into the existing command when it fits (the usual case,
+    /// since `@rpath/...` is shorter than a jailbreak path). Otherwise the command is
+    /// removed and re-injected, which needs header padding like any injection.
+    public static func rewriteDylibPath(from oldPath: String, to newPath: String, in url: URL) throws {
+        var data = try Data(contentsOf: url)
+        let slices = try MachO.slices(in: data)
+        guard !slices.isEmpty else { throw InjectError.notMachO }
+
+        var rewritten = false
+        var needsReinject: [(weak: Bool, slice: MachO.Slice)] = []
+
+        for slice in slices {
+            guard let found = try findCommand(data, slice: slice, path: oldPath) else { continue }
+            let cmd = try MachO.u32(data, found.offset)
+            let weak = cmd == MachO.LC_LOAD_WEAK_DYLIB
+            let nameOffset = Int(try MachO.u32(data, found.offset + 8))
+            let available = found.size - nameOffset
+            let bytes = Array(newPath.utf8)
+
+            if bytes.count + 1 <= available {
+                // Overwrite the string in place and clear the rest of the command.
+                var payload = Data(bytes)
+                payload.append(contentsOf: [UInt8](repeating: 0, count: available - bytes.count))
+                let start = data.startIndex + found.offset + nameOffset
+                data.replaceSubrange(start..<(start + available), with: payload)
+                rewritten = true
+            } else {
+                needsReinject.append((weak, slice))
+            }
+        }
+
+        if !needsReinject.isEmpty {
+            try data.write(to: url)
+            try removeDylib(path: oldPath, from: url)
+            try inject(dylibPath: newPath, into: url, weak: needsReinject[0].weak)
+            return
+        }
+        guard rewritten else { throw InjectError.dylibNotFound }
+        try data.write(to: url)
+    }
+
     // MARK: Weak flag
 
     /// Switches a reference between `LC_LOAD_DYLIB` and `LC_LOAD_WEAK_DYLIB`.

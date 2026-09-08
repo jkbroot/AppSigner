@@ -129,3 +129,61 @@ extension MachOInjectorTests {
                        "gone from every slice")
     }
 }
+
+// MARK: - Rewriting load paths
+
+extension MachOInjectorTests {
+    func testSuggestsRPathForJailbreakPaths() {
+        XCTAssertEqual(MachOFile.suggestedRPath(for: "/Library/Frameworks/CydiaSubstrate.framework/CydiaSubstrate"),
+                       "@rpath/CydiaSubstrate.framework/CydiaSubstrate")
+        XCTAssertEqual(MachOFile.suggestedRPath(for: "/Library/MobileSubstrate/DynamicLibraries/Tweak.dylib"),
+                       "@rpath/Tweak.dylib")
+        XCTAssertEqual(MachOFile.suggestedRPath(for: "/var/jb/Library/Frameworks/X.framework/X"),
+                       "@rpath/X.framework/X")
+        XCTAssertNil(MachOFile.suggestedRPath(for: "/usr/lib/libSystem.B.dylib"), "system paths are left alone")
+        XCTAssertNil(MachOFile.suggestedRPath(for: "@rpath/Already.dylib"), "already relative")
+    }
+
+    func testRewritesAShorterPathInPlace() throws {
+        let bin = try compile(arch: "arm64", headerPad: true)
+        try MachOInjector.inject(dylibPath: "/Library/MobileSubstrate/DynamicLibraries/Tweak.dylib", into: bin)
+        let before = try MachOFile.read(url: bin).dylibs.count
+
+        try MachOInjector.rewriteDylibPath(from: "/Library/MobileSubstrate/DynamicLibraries/Tweak.dylib",
+                                           to: "@rpath/Tweak.dylib", in: bin)
+
+        let after = try MachOFile.read(url: bin).dylibs
+        XCTAssertTrue(after.contains { $0.path == "@rpath/Tweak.dylib" })
+        XCTAssertFalse(after.contains { $0.path.hasPrefix("/Library/") })
+        XCTAssertEqual(after.count, before, "rewriting does not add or drop commands")
+        XCTAssertEqual(try ProcessRunner().run("/usr/bin/otool", ["-l", bin.path]).exitCode, 0)
+    }
+
+    func testRewritingToALongerPathStillWorks() throws {
+        let bin = try compile(arch: "arm64", headerPad: true)
+        try MachOInjector.inject(dylibPath: "@rpath/S.dylib", into: bin)
+        let longer = "@rpath/AVeryMuchLongerFrameworkName.framework/AVeryMuchLongerFrameworkName"
+
+        try MachOInjector.rewriteDylibPath(from: "@rpath/S.dylib", to: longer, in: bin)
+
+        let after = try MachOFile.read(url: bin).dylibs
+        XCTAssertTrue(after.contains { $0.path == longer })
+        XCTAssertFalse(after.contains { $0.path == "@rpath/S.dylib" })
+    }
+
+    func testRewritePreservesTheWeakFlag() throws {
+        let bin = try compile(arch: "arm64", headerPad: true)
+        try MachOInjector.inject(dylibPath: "/var/jb/Library/W.dylib", into: bin, weak: true)
+        try MachOInjector.rewriteDylibPath(from: "/var/jb/Library/W.dylib", to: "@rpath/W.dylib", in: bin)
+        let ref = try XCTUnwrap(MachOFile.read(url: bin).dylibs.first { $0.path == "@rpath/W.dylib" })
+        XCTAssertTrue(ref.isWeak)
+    }
+
+    func testRewritingAnAbsentPathThrows() throws {
+        let bin = try compile(arch: "arm64", headerPad: true)
+        XCTAssertThrowsError(try MachOInjector.rewriteDylibPath(from: "@rpath/Nope.dylib",
+                                                                to: "@rpath/X.dylib", in: bin)) { error in
+            XCTAssertEqual(error as? MachOInjector.InjectError, .dylibNotFound)
+        }
+    }
+}

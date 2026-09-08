@@ -137,6 +137,30 @@ public enum MachOFile {
         public init(path: String, isWeak: Bool) { self.path = path; self.isWeak = isWeak }
     }
 
+    /// Jailbreak-only prefixes whose libraries can be re-pointed into the app bundle.
+    private static let jailbreakPrefixes = [
+        "/var/jb/Library/", "/var/jb/usr/lib/", "/Library/MobileSubstrate/",
+        "/Library/Frameworks/", "/Library/",
+    ]
+
+    /// Maps a jailbreak install path to the `@rpath` form used inside a signed app.
+    /// Returns nil for system paths and for paths that are already relative.
+    ///
+    /// `/Library/Frameworks/X.framework/X` -> `@rpath/X.framework/X`
+    /// `/Library/MobileSubstrate/DynamicLibraries/T.dylib` -> `@rpath/T.dylib`
+    public static func suggestedRPath(for path: String) -> String? {
+        guard path.hasPrefix("/") else { return nil }                       // already relative
+        guard path.hasPrefix("/var/jb/") || path.hasPrefix("/Library/") else { return nil }
+        guard jailbreakPrefixes.contains(where: { path.hasPrefix($0) }) else { return nil }
+
+        // Keep the framework wrapper when there is one, otherwise just the file name.
+        let components = path.split(separator: "/").map(String.init)
+        if let index = components.firstIndex(where: { $0.hasSuffix(".framework") }) {
+            return "@rpath/" + components[index...].joined(separator: "/")
+        }
+        return "@rpath/" + ((path as NSString).lastPathComponent)
+    }
+
     public static func isMachO(url: URL) -> Bool {
         guard let handle = try? FileHandle(forReadingFrom: url) else { return false }
         defer { try? handle.close() }

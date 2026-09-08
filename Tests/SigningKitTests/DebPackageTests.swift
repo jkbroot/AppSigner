@@ -115,3 +115,30 @@ final class DebPackageTests: XCTestCase {
         XCTAssertThrowsError(try DebPackage.extract(deb: bogus, to: try tempDir()))
     }
 }
+
+extension DebPackageTests {
+    /// ElleKit-style packages ship a CydiaSubstrate.framework rather than a loose dylib.
+    func testFindsFrameworksInThePayload() throws {
+        let dir = try tempDir()
+        let payload = dir.appendingPathComponent("payload")
+        let fw = payload.appendingPathComponent("Library/Frameworks/CydiaSubstrate.framework")
+        try write("FWBIN", to: fw.appendingPathComponent("CydiaSubstrate"))
+        try write("Package: ellekit\nVersion: 1.1.3\n", to: dir.appendingPathComponent("controlroot/control"))
+
+        let runner = ProcessRunner()
+        let controlTar = dir.appendingPathComponent("control.tar.gz")
+        try runner.runThrowing("/usr/bin/tar", ["-czf", controlTar.path, "-C",
+                                                dir.appendingPathComponent("controlroot").path, "control"])
+        let dataTar = dir.appendingPathComponent("data.tar.gz")
+        try runner.runThrowing("/usr/bin/tar", ["-czf", dataTar.path, "-C", payload.path, "Library"])
+        let debianBinary = dir.appendingPathComponent("debian-binary")
+        try write("2.0\n", to: debianBinary)
+        let deb = dir.appendingPathComponent("ellekit.deb")
+        try makeAr(members: [("debian-binary", debianBinary), ("control.tar.gz", controlTar),
+                             ("data.tar.gz", dataTar)], at: deb)
+
+        let contents = try DebPackage.extract(deb: deb, to: try tempDir())
+        XCTAssertEqual(contents.frameworks.map(\.lastPathComponent), ["CydiaSubstrate.framework"])
+        XCTAssertTrue(contents.dylibs.isEmpty, "the framework binary is not listed as a loose dylib")
+    }
+}

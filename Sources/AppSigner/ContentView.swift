@@ -17,6 +17,7 @@ struct ContentView: View {
             if model.isBatch { queueSection }
             if model.iconURL != nil { iconRow }
             if !model.tweaks.isEmpty { tweaksSection }
+            if !model.allFrameworks.isEmpty { frameworksSection }
             if !model.dylibs.isEmpty { dylibsSection }
             identityRow
             if model.ipaURL != nil { metadataRows }
@@ -166,6 +167,29 @@ struct ContentView: View {
                     Spacer()
                     Button { model.removeTweak(tweak) } label: { Image(systemName: "xmark.circle.fill") }
                         .buttonStyle(.borderless).foregroundStyle(.secondary).help("Remove")
+                }
+                .padding(.vertical, 7).padding(.horizontal, 10)
+                .background(RoundedRectangle(cornerRadius: 8).fill(Color(nsColor: .controlBackgroundColor)))
+            }
+        }
+    }
+
+    // MARK: Frameworks
+
+    private var frameworksSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            ForEach(model.allFrameworks, id: \.self) { url in
+                HStack(spacing: 10) {
+                    Image(systemName: "cube.box.fill").foregroundStyle(.secondary).frame(width: 20)
+                    Text("Framework").font(.subheadline).frame(width: 74, alignment: .leading)
+                    Text(url.lastPathComponent).font(.subheadline).lineLimit(1).truncationMode(.middle)
+                    Spacer()
+                    if model.extraFrameworks.contains(url) {
+                        Button { model.removeFramework(url) } label: { Image(systemName: "xmark.circle.fill") }
+                            .buttonStyle(.borderless).foregroundStyle(.secondary).help("Remove")
+                    } else {
+                        Text("from tweak").font(.caption2).foregroundStyle(.secondary)
+                    }
                 }
                 .padding(.vertical, 7).padding(.horizontal, 10)
                 .background(RoundedRectangle(cornerRadius: 8).fill(Color(nsColor: .controlBackgroundColor)))
@@ -373,12 +397,12 @@ struct ContentView: View {
     // MARK: File picker (accepts either type, multiple)
 
     fileprivate static func pickFiles(onPick: @escaping ([URL]) -> Void) {
-        let types = ["ipa", "mobileprovision", "dylib", "deb", "png", "jpg", "jpeg", "heic"]
+        let types = ["ipa", "mobileprovision", "dylib", "deb", "framework", "png", "jpg", "jpeg", "heic"]
             .compactMap { UTType(filenameExtension: $0) }
         let panel = NSOpenPanel()
         panel.allowedContentTypes = types.isEmpty ? [.data] : types
         panel.allowsMultipleSelection = true
-        panel.canChooseDirectories = false
+        panel.canChooseDirectories = true      // .framework is a directory
         panel.prompt = "Add"
         panel.message = "Choose an .ipa, .mobileprovision, .dylib, .deb and/or an icon image"
         if panel.runModal() == .OK { onPick(panel.urls) }
@@ -398,7 +422,7 @@ private struct UnifiedDropZone: View {
                 Image(systemName: "arrow.down.doc.fill")
                     .font(.system(size: 22))
                     .foregroundStyle(targeted ? Color.accentColor : .secondary)
-                Text("Drag .ipa · .mobileprovision · .dylib · .deb · icon here")
+                Text("Drag .ipa · .mobileprovision · .dylib · .deb · .framework · icon here")
                     .font(.subheadline).foregroundStyle(.primary)
                 Text("or click to choose — files are sorted automatically")
                     .font(.caption).foregroundStyle(.secondary)
