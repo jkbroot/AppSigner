@@ -17,16 +17,19 @@ public struct SigningRequest {
     public var bundleEdits: BundleEdits
     /// Inject new dylibs as weak references so a missing file cannot crash the app.
     public var injectWeak: Bool
+    /// In-place string-literal overrides applied to the bundle's binaries before signing.
+    public var stringPatches: [StringPatch]
     public var outputURL: URL?
     public init(ipa: URL, profileURL: URL, identitySHA1: String,
                 edits: InfoPlistEdits = .init(), dylibs: [URL] = [],
                 iconImage: URL? = nil, resourceBundles: [URL] = [], frameworks: [URL] = [],
                 extensionProfiles: [String: URL] = [:], bundleEdits: BundleEdits = .init(),
-                injectWeak: Bool = true, outputURL: URL? = nil) {
+                injectWeak: Bool = true, stringPatches: [StringPatch] = [], outputURL: URL? = nil) {
         self.ipa = ipa; self.profileURL = profileURL; self.identitySHA1 = identitySHA1
         self.edits = edits; self.dylibs = dylibs; self.iconImage = iconImage
         self.resourceBundles = resourceBundles; self.frameworks = frameworks
-        self.extensionProfiles = extensionProfiles; self.bundleEdits = bundleEdits; self.injectWeak = injectWeak; self.outputURL = outputURL
+        self.extensionProfiles = extensionProfiles; self.bundleEdits = bundleEdits
+        self.injectWeak = injectWeak; self.stringPatches = stringPatches; self.outputURL = outputURL
     }
 }
 
@@ -157,6 +160,11 @@ public struct SigningPipeline {
                 try MachOInjector.inject(dylibPath: "@executable_path/Frameworks/\(name)",
                                          into: mainBinary, weak: request.injectWeak)
             }
+        }
+
+        if !request.stringPatches.isEmpty {
+            let n = try StringPatcher.apply(request.stringPatches, appURL: app)
+            progress?(.editingBundle("Patched \(n) string\(n == 1 ? "" : "s")"))
         }
 
         if let iconImage = request.iconImage {

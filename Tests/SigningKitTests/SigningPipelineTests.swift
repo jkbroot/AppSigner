@@ -200,6 +200,45 @@ extension SigningPipelineTests {
 }
 
 extension SigningPipelineTests {
+    /// End-to-end: rewrite a real string literal in the main binary and re-sign.
+    /// Gated by APPSIGNER_INTEGRATION=1.
+    func testSignsWithAStringPatchEndToEnd() throws {
+        guard ProcessInfo.processInfo.environment["APPSIGNER_INTEGRATION"] == "1" else {
+            throw XCTSkip("set APPSIGNER_INTEGRATION=1")
+        }
+        let profileURL = Fixtures.profileURL
+        let ipa = try XCTUnwrap(Fixtures.sourceIPAs().first)
+        let profile = try ProvisioningProfile.parse(data: Data(contentsOf: profileURL))
+        let identity = try XCTUnwrap(KeychainService.identities(
+            try KeychainService().listCodeSigningIdentities(),
+            matchingCertificateSHA1s: profile.developerCertificateSHA1s).first)
+
+        // Pick a real string long enough to overwrite with our marker.
+        let marker = "APPSIGNER_TEST"
+        let pkg = try IPAPackage.unpack(ipa: ipa)
+        let exe = try XCTUnwrap(try InfoPlistEditor(url: pkg.appURL.appendingPathComponent("Info.plist"))
+            .string(forKey: "CFBundleExecutable"))
+        let original = try XCTUnwrap(MachOStrings.strings(url: pkg.appURL.appendingPathComponent(exe))
+            .first { $0.utf8.count >= marker.utf8.count && $0 != marker && $0.allSatisfy(\.isASCII) })
+        pkg.cleanup()
+        print("patching string \"\(original)\" -> \"\(marker)\"")
+
+        let out = Fixtures.workspaceRoot.appendingPathComponent("StringPatchTest_Signed.ipa")
+        try? FileManager.default.removeItem(at: out)
+        let result = try SigningPipeline().sign(
+            SigningRequest(ipa: ipa, profileURL: profileURL, identitySHA1: identity.sha1,
+                           stringPatches: [StringPatch(binaryPath: exe, original: original, replacement: marker)],
+                           outputURL: out),
+            progress: { print("• \($0)") })
+
+        let signed = try IPAPackage.unpack(ipa: result.outputURL)
+        defer { signed.cleanup(); try? FileManager.default.removeItem(at: out) }
+        XCTAssertTrue(try MachOStrings.strings(url: signed.appURL.appendingPathComponent(exe)).contains(marker),
+                      "the patched string should be present in the signed binary")
+        try Codesigner().verify(signed.appURL)
+        print("  ✅ string patched and the app verifies")
+    }
+
     /// Full patch flow: pick a real class, build the patch dylib, inject and sign.
     func testSignsWithAGeneratedPatchDylibEndToEnd() throws {
         guard ProcessInfo.processInfo.environment["APPSIGNER_INTEGRATION"] == "1" else {

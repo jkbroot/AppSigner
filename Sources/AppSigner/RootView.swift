@@ -19,6 +19,7 @@ struct RootView: View {
             .sheet(isPresented: $model.showPlistEditor) { PlistEditorView().frame(width: 620, height: 580) }
             .sheet(isPresented: $model.showDevTools) { DevToolsView().frame(width: 620, height: 540) }
             .sheet(isPresented: $model.showTools) { ToolsView().frame(width: 520, height: 480) }
+            .sheet(isPresented: $model.showOTA) { OTAView().frame(width: 460, height: 640) }
             .alert("Save preset", isPresented: $showSavePreset) {
                 TextField("Name", text: $presetName)
                 Button("Save") { if !presetName.isEmpty { model.saveCurrentAsPreset(named: presetName) } }
@@ -33,11 +34,12 @@ struct RootView: View {
         ToolbarItemGroup(placement: .primaryAction) {
             // Inspect the loaded app.
             toolButton("Contents", "shippingbox", enabled: model.ipaURL != nil) { model.showContents = true }
-            toolButton("Binary Explorer", "curlybraces", enabled: model.ipaURL != nil) { model.showClassExplorer = true }
+            toolButton("Binary Explorer", "curlybraces", enabled: model.ipaURL != nil,
+                       badge: model.patches.count + model.stringPatches.count) { model.showClassExplorer = true }
             toolButton("Info.plist", "doc.text", enabled: model.ipaURL != nil) { model.showPlistEditor = true }
             Divider()
             // Extend and configure.
-            toolButton("Developer Tools", "hammer", badge: model.patches.count) { model.showDevTools = true }
+            toolButton("Developer Tools", "hammer", badge: model.addedToolIDs.count) { model.showDevTools = true }
             toolButton("External Tools", "wrench.and.screwdriver") { model.showTools = true }
             presetMenu
             Button { model.refreshIdentities() } label: { Label("Reload identities", systemImage: "arrow.clockwise") }

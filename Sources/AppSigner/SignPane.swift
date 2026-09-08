@@ -112,7 +112,7 @@ struct SignPane: View {
     @ViewBuilder
     private var additions: some View {
         let hasAny = !model.dylibs.isEmpty || !model.tweaks.isEmpty || !model.allFrameworks.isEmpty
-            || model.iconURL != nil || !model.patches.isEmpty
+            || model.iconURL != nil || !model.patches.isEmpty || !model.stringPatches.isEmpty
         if hasAny {
             SectionCard("Additions", systemImage: "plus.square.on.square") {
                 if let icon = model.iconURL {
@@ -149,6 +149,11 @@ struct SignPane: View {
                     ChipRow(systemImage: "wand.and.stars", title: patch.summary,
                             subtitle: nil, tint: .purple, onRemove: { model.removePatch(patch) })
                 }
+                ForEach(model.stringPatches) { patch in
+                    ChipRow(systemImage: "text.badge.xmark", title: patch.summary,
+                            subtitle: (patch.binaryPath as NSString).lastPathComponent,
+                            tint: .orange, onRemove: { model.removeStringPatch(patch) })
+                }
             }
         }
     }
@@ -178,6 +183,19 @@ struct SignPane: View {
                         ForEach(model.devices) { Text($0.name).tag($0.udid) }
                     }
                 }
+            }
+            Divider()
+            HStack(spacing: 10) {
+                Image(systemName: "wifi").foregroundStyle(model.otaRunning ? .green : .secondary).frame(width: 20)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Install wirelessly (OTA)").font(.callout)
+                    Text(model.resultURL == nil ? "Available after signing"
+                         : (model.otaRunning ? "Server running" : "Serve over your network — no cable"))
+                        .font(.caption2).foregroundStyle(model.otaRunning ? .green : .secondary)
+                }
+                Spacer()
+                Button(model.otaRunning ? "Open" : "Start…") { model.showOTA = true }
+                    .controlSize(.small).disabled(model.resultURL == nil)
             }
         }
     }

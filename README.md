@@ -66,15 +66,21 @@ install — the standard [libimobiledevice](https://libimobiledevice.org) suite.
   state (weak/strong, bundled/missing/jailbreak) and who else uses it, and lets you
   **remove references, make them weak, or delete whole bundle entries** — app
   extensions, watch apps, frameworks, resource bundles, localizations — during signing.
-- **Binary explorer (class-dump)** — reads the Objective-C class and method names straight
-  out of the main binary's `__objc_classname` / `__objc_methname` sections in pure Swift,
-  so it works on modern chained-fixups binaries without loading them. Search tens of
-  thousands of classes and selectors to find the exact method you want to change.
+- **Binary explorer (class-dump + strings)** — reads Objective-C class and method names
+  from `__objc_classname` / `__objc_methname` and string literals from `__cstring`, straight
+  out of the Mach-O in pure Swift, so it works on modern chained-fixups binaries without
+  loading them. A picker points it at **any binary in the bundle** — the app, an extension,
+  a framework or a dylib — and you can search tens of thousands of classes, selectors and
+  strings to find exactly what you want to change.
 - **Method patches** — override what a method returns without touching its code: pick a
   class and selector, choose the return value (yes/no, number, text or null), and AppSigner
   generates a small hook dylib, **compiles it from source on your Mac**, and injects it
   before signing — so a check like "is jailbroken" or "is subscribed" can be forced to a
   fixed answer. Patches are listed with the additions and removed with one click.
+- **String patches** — rewrite a string literal directly in the binary before signing:
+  redirect an API host, flip a feature-flag key, change a label. The edit is in place
+  (the new text must fit the original's byte length) and applied across every slice, then
+  sealed by the signature.
 - **Pre-flight checks** — before you sign, it flags FairPlay-encrypted binaries, expired
   or soon-to-expire profiles, an identity the profile does not authorize, a bundle id
   that a non-wildcard profile will not cover, extensions that need their own profiles,
@@ -97,6 +103,12 @@ install — the standard [libimobiledevice](https://libimobiledevice.org) suite.
   the advanced `Info.plist` options) and reapply it in one click. App-specific fields are
   never stored, so a preset is safe to reuse across apps.
 - **On-device install** — install the signed IPA over USB via `ideviceinstaller`.
+- **Wireless (OTA) install** — install straight to an iPhone with no cable. AppSigner starts
+  a local HTTPS server (with its own self-signed certificate, generated on the fly) that
+  hosts the signed IPA and an `itms-services` manifest, and shows a QR code and a
+  trust-then-install checklist. Everything stays on your local network — no third-party
+  services, no internet exposure. The device trusts the certificate once, and must be
+  included in the provisioning profile.
 - **External-tools manager** — detect, install and update the optional tools (Homebrew
   formulae, plus a GitHub-releases link for the legacy `optool`).
 - **Signature verification** — every run finishes with `codesign --verify --deep --strict`.
@@ -139,13 +151,15 @@ You can also open `Package.swift` in Xcode and run the `AppSigner` target.
 3. Optionally edit the **Bundle ID / name / version / build**.
 4. *(Optional)* use the **top toolbar** to inspect and extend the app: **Contents** to
    strip out tweak libraries, app extensions, a watch app or large resources; **Binary
-   Explorer** to browse the app's classes and add method patches; **Info.plist** for the
-   advanced compatibility editor; **Developer Tools** to inject a debugger such as FLEX.
-   Review the **pre-flight** findings above the Sign button.
+   Explorer** to browse the classes, selectors and strings of any binary in the bundle and
+   add method or string patches; **Info.plist** for the advanced compatibility editor;
+   **Developer Tools** to inject a debugger such as FLEX. Review the **pre-flight** findings
+   above the Sign button.
 5. *(Optional)* enable **Install on device after signing** and pick a connected device.
 6. Press **Sign**. A live process screen shows each step: unpack → edit → embed profile →
-   inject → replace icon → sign (inner → outer) → verify → repack.
-7. The signed `<name>_Signed.ipa` is written next to the input, ready to install.
+   inject → patch → replace icon → sign (inner → outer) → verify → repack.
+7. The signed `<name>_Signed.ipa` is written next to the input, ready to install. To put it
+   on an iPhone without a cable, open **Install wirelessly (OTA)** and scan the QR code.
 
 ## How it works
 

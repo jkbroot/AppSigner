@@ -202,29 +202,124 @@ final class SignerViewModel: ObservableObject {
     }
     func removePatch(_ patch: MethodPatch) { patches.removeAll { $0.id == patch.id } }
 
-    // Binary / class explorer (static analysis of the app's main binary)
-    @Published var showClassExplorer = false
-    @Published var classDumpLoading = false
-    @Published var classDumpReport: ClassDumpReport?
+    // In-place string-literal overrides (rewritten in the binary before signing)
+    @Published var stringPatches: [StringPatch] = []
+    func addStringPatch(_ patch: StringPatch) {
+        stringPatches.removeAll { $0.binaryPath == patch.binaryPath && $0.original == patch.original }
+        stringPatches.append(patch)
+    }
+    func removeStringPatch(_ patch: StringPatch) { stringPatches.removeAll { $0.id == patch.id } }
 
+    // Binary explorer — static analysis of any Mach-O in the bundle (classes, selectors, strings)
+    @Published var showClassExplorer = false
+    @Published var explorerLoading = false
+    @Published var explorerBinaries: [BinaryReport] = []   // every Mach-O in the bundle, main first
+    @Published var selectedBinaryPath: String?             // bundle-relative path of the chosen binary
+    @Published var classDumpReport: ClassDumpReport?       // classes + selectors of the chosen binary
+    @Published var binaryStrings: [String] = []            // __cstring literals of the chosen binary
+    private var explorerPkg: IPAPackage?                   // a persistent unpacked copy while exploring
+
+    /// Unpacks the app once and lists every binary in it, selecting the main executable.
     func exploreBinary() {
-        guard let ipaURL, !classDumpLoading else { return }
-        classDumpLoading = true; classDumpReport = nil
+        guard let ipaURL, !explorerLoading else { return }
+        if explorerPkg != nil, !explorerBinaries.isEmpty { return }   // already loaded
+        explorerLoading = true
         DispatchQueue.global(qos: .userInitiated).async {
-            var report: ClassDumpReport?
-            if let pkg = try? IPAPackage.unpack(ipa: ipaURL) {
-                if let exe = try? InfoPlistEditor(url: pkg.appURL.appendingPathComponent("Info.plist"))
-                    .string(forKey: "CFBundleExecutable") ?? nil {
-                    report = try? MachOClassDump.analyze(url: pkg.appURL.appendingPathComponent(exe))
-                }
-                pkg.cleanup()
+            var pkg: IPAPackage?
+            var binaries: [BinaryReport] = []
+            if let p = try? IPAPackage.unpack(ipa: ipaURL) {
+                pkg = p
+                binaries = (try? BundleInspector().inspect(appURL: p.appURL).binaries) ?? []
             }
+            let ordered = binaries.sorted { Self.roleRank($0.role) < Self.roleRank($1.role) }
             DispatchQueue.main.async {
-                self.classDumpReport = report
-                self.classDumpLoading = false
-                if report == nil { self.errorMessage = "Could not read the binary." }
+                self.explorerPkg = pkg
+                self.explorerBinaries = ordered
+                self.explorerLoading = false
+                if pkg == nil { self.errorMessage = "Could not read the binary." }
+                else { self.selectBinary(ordered.first?.id) }
             }
         }
+    }
+
+    /// Reads classes, selectors and strings for the chosen binary from the unpacked copy.
+    func selectBinary(_ path: String?) {
+        guard let path, let pkg = explorerPkg else { return }
+        selectedBinaryPath = path
+        classDumpReport = nil; binaryStrings = []
+        let url = pkg.appURL.appendingPathComponent(path)
+        DispatchQueue.global(qos: .userInitiated).async {
+            let report = try? MachOClassDump.analyze(url: url)
+            let strings = (try? MachOStrings.strings(url: url)) ?? []
+            DispatchQueue.main.async {
+                guard self.selectedBinaryPath == path else { return }   // ignore a stale selection
+                self.classDumpReport = report
+                self.binaryStrings = strings
+            }
+        }
+    }
+
+    /// The role that sorts a binary to the top of the picker (main executable first).
+    private static func roleRank(_ role: BinaryReport.Role) -> Int {
+        switch role {
+        case .mainExecutable: return 0
+        case .appExtension: return 1
+        case .framework: return 2
+        case .dylib: return 3
+        case .watchExecutable: return 4
+        case .other: return 5
+        }
+    }
+
+    private func resetExplorer() {
+        explorerPkg?.cleanup(); explorerPkg = nil
+        explorerBinaries = []; selectedBinaryPath = nil
+        classDumpReport = nil; binaryStrings = []
+    }
+
+    // Wireless (OTA) install — a local HTTPS server that hosts the signed IPA
+    @Published var showOTA = false
+    @Published var otaRunning = false
+    @Published var otaStarting = false
+    @Published var otaError: String?
+    @Published var otaBaseURL = ""
+    @Published var otaInstallURL = ""
+    private var otaServer: OTAServer?
+
+    /// Starts a local HTTPS server that serves the signed IPA for an over-the-air install.
+    func startOTA() {
+        guard let ipa = resultURL else { otaError = "Sign the app first."; return }
+        guard let host = OTAServer.lanIPAddress() else {
+            otaError = "No Wi-Fi or Ethernet connection found — join a network the iPhone shares."
+            return
+        }
+        otaError = nil; otaStarting = true
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                let info = try IPAPackage.readAppInfo(ipa: ipa)
+                let cert = try OTACertificateFactory.generate(ipAddress: host)
+                let server = OTAServer(config: .init(ipaURL: ipa, bundleID: info.bundleID,
+                                                     version: info.shortVersion, title: info.displayName),
+                                       certificate: cert, host: host)
+                try server.start()
+                DispatchQueue.main.async {
+                    self.otaServer = server
+                    self.otaBaseURL = server.baseURL
+                    self.otaInstallURL = server.installURL
+                    self.otaRunning = true; self.otaStarting = false
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    self.otaError = "Could not start the server: \(error.localizedDescription)"
+                    self.otaStarting = false
+                }
+            }
+        }
+    }
+
+    func stopOTA() {
+        otaServer?.stop(); otaServer = nil
+        otaRunning = false; otaStarting = false; otaBaseURL = ""; otaInstallURL = ""
     }
 
     // Developer tools (injectable debuggers such as FLEX)
@@ -742,6 +837,7 @@ final class SignerViewModel: ObservableObject {
         appPlist = [:]; resetAdvancedPlistEdits()
         bundleID = ""; displayName = ""; shortVersion = ""; bundleVersion = ""
         clearContentsSelection()
+        resetExplorer(); stringPatches = []; stopOTA()
     }
     func clearProfile() { profileURL = nil; profile = nil; matchedIdentities = []; selectedIdentitySHA1 = nil }
 
@@ -750,6 +846,7 @@ final class SignerViewModel: ObservableObject {
         report = nil
         originalEntitlements = nil
         clearContentsSelection()
+        resetExplorer(); stringPatches = []
         appPlist = [:]
         resetAdvancedPlistEdits()
         loadAppPlist(from: url)
@@ -814,6 +911,7 @@ final class SignerViewModel: ObservableObject {
     // MARK: Signing + process screen
 
     func sign() {
+        stopOTA()   // a new run produces a new IPA; tear down any stale server
         guard prepareArtifacts() else { return }
         if isBatch { signBatch(); return }
         guard let ipaURL, let profileURL, let sha1 = selectedIdentitySHA1 else { return }
@@ -827,7 +925,7 @@ final class SignerViewModel: ObservableObject {
                                      resourceBundles: resourceBundles, frameworks: allFrameworks,
                                      extensionProfiles: extensionProfiles,
                                      bundleEdits: bundleEdits, injectWeak: injectWeak,
-                                     outputURL: nil)
+                                     stringPatches: stringPatches, outputURL: nil)
         let shouldInstall = installAfterSign && deviceToolsAvailable
         let udid = selectedDeviceUDID
         let deviceName = devices.first { $0.udid == udid }?.name ?? "connected device"
