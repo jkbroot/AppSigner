@@ -36,9 +36,27 @@ public struct DeviceService {
             .filter { !$0.isEmpty }
     }
 
-    public static func installArguments(ipaPath: String, udid: String?) -> [String] {
-        if let udid { return ["-u", udid, "-i", ipaPath] }
-        return ["-i", ipaPath]
+    /// Which CLI generation `ideviceinstaller` exposes: 1.2.0 replaced the legacy
+    /// `-i/--install` flag with the `install PATH` subcommand.
+    public enum InstallCLI: Equatable {
+        case subcommand
+        case legacyFlag
+    }
+
+    public static func installArguments(ipaPath: String, udid: String?, cli: InstallCLI = .subcommand) -> [String] {
+        let device = udid.map { ["-u", $0] } ?? []
+        switch cli {
+        case .subcommand: return device + ["install", ipaPath]
+        case .legacyFlag: return device + ["-i", ipaPath]
+        }
+    }
+
+    /// Detects the CLI generation from `ideviceinstaller --help` output: releases
+    /// up to 1.1.x list `-i, --install`, 1.2.0 and later do not. The help text is
+    /// a more reliable marker than the version number, which distro builds patch.
+    /// The legacy form targets 1.1.x, where `-u` selects the device; 1.0.x used `-U`.
+    public static func installCLI(helpOutput: String) -> InstallCLI {
+        helpOutput.contains("-i, --install") ? .legacyFlag : .subcommand
     }
 
     public static func findTool(_ name: String, searchPaths: [String] = defaultSearchPaths) -> String? {
@@ -71,12 +89,22 @@ public struct DeviceService {
         return (name?.isEmpty == false) ? name : nil
     }
 
+    /// Probes the installed `ideviceinstaller` to pick the argument form it
+    /// understands; falls back to the current subcommand CLI when probing fails.
+    /// Both streams are read because `--help` has moved between them upstream.
+    /// One extra process per install, so the result is deliberately not cached.
+    private func detectCLI(installer: String) -> InstallCLI {
+        guard let probe = try? runner.run(installer, ["--help"]) else { return .subcommand }
+        return Self.installCLI(helpOutput: probe.stdout + probe.stderr)
+    }
+
     /// Installs the IPA. `udid` nil installs to the only/first connected device.
     public func install(ipa: URL, udid: String?, progress: ((String) -> Void)? = nil) throws {
         guard let installer = Self.findTool("ideviceinstaller") else {
             throw DeviceError.toolMissing("ideviceinstaller")
         }
-        let args = Self.installArguments(ipaPath: ipa.path, udid: udid)
+        let cli = detectCLI(installer: installer)
+        let args = Self.installArguments(ipaPath: ipa.path, udid: udid, cli: cli)
         let result = try runner.run(installer, args)
         (result.stdout + result.stderr)
             .split(whereSeparator: \.isNewline)
